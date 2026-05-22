@@ -1,36 +1,3 @@
-# 🚀 Get Started
-
-**This repo is where attendees go to continue their learning after your session — and your Copilot agent will help you set it up.**
-
-### Step 1: Open your repo
-
-Open this repo in a **Codespace** (click the green **Code** button → **Create a Codespace**) — or clone it locally. Then open **GitHub Copilot Chat**.
-
-### Step 2: Add your content
-
-Give the agent something to work with. Drag files into the Explorer panel — session abstracts, outlines, screenshots, notes — and drop them in one of two places:
-
-| Where to put it | What goes there | Who sees it |
-|---|---|---|
-| **`_remove-before-publish/`** | Internal reference materials (abstracts, outlines, screenshots, planning docs) | **Copilot only** — never published |
-| **`/docs/`, `/src/`, or repo root** | Lab instructions, demo code, sample data, getting-started guides | **Attendees** — published with the repo |
-
-> 💡 Not sure? Start by dropping your session abstract or outline into `_remove-before-publish/`. The agent will figure out what to do with it.
-
-### Step 3: Ask the Agent
-
-Once your content is in the repo, use these three phrases with Copilot to build out your session repo:
-
-| Phrase to use with Copilot | What it does | When to run it |
-|---|---|---|
-| **"Help me get started"** | Sets up session title, description, outcomes, and owners | After you've added your session abstract or outline to the repo |
-| **"Help me refine content"** | Organizes your session content into the repo | Each time you add or update content |
-| **"Help me finalize"** | Final review, cleanup, and publication prep | When you're ready to publish |
-
-> 💡 **These three phrases are just the starting point.** Copilot can do much more — try asking it to brainstorm next steps for attendees, generate code samples, or build out your repo structure. Don't be afraid to put it in plan mode and ask for what you need.
-
----
-
 <a name="start-building"></a>
 <br>
 <p align="center">
@@ -39,54 +6,192 @@ Once your content is in the repo, use these three phrases with Copilot to build 
 
 # [Microsoft Build 2026](https://build.microsoft.com)
 
-## 🔥 BRKXXX: SESSION TITLE
+## 🔥 DEM364: Zava Designer Agent — One Database, Every Layer of the AI Stack
 
 ### Session Description
 
-*Add Session Description*
+Build the **Zava Designer Agent** — an AI-powered room designer that analyzes a photo of your living room and recommends furniture from a 100K-product catalog — using nothing but **Azure HorizonDB** (Azure's cloud-native PostgreSQL service).
 
-### 🏫 Getting started in a guided session
+No Pinecone. No Neo4j. No separate reranker service. Vector search, full-text search, graph traversal, multimodal embeddings, reranking, and AI pipelines all run inside one Postgres database. This demo walks through a 6-tool agent pipeline — from `azure_ai.generate()` reading the room photo, to `ai.search()` doing BM25 + DiskANN + semantic reranking in one call, to Apache AGE Cypher queries traversing a style graph, to `azure_ai.rank()` curating the final picks.
 
-To get started in a guided lab session:
-- <!-- step 1 -->
-- <!-- step 2 -->
-- <!-- step 3 -->
+### 🛠️ What It Does
 
-### 🏠 Getting started in your own environment
+Upload a room photo. The agent analyzes it, searches 100K Amazon Home & Kitchen products, traverses a style graph, reranks results, and picks six furniture pieces that fit — all from a single HorizonDB instance.
 
-If you're following these steps at your own pace:
-- Clone this repository
-- Set up your development environment
-- <!-- step 3 -->
+The 6-tool agent pipeline:
+
+| Step | Tool | HorizonDB Feature | Purpose |
+|------|------|--------------------|---------|
+| 1 | `analyzeRoomPhoto` | `azure_ai.generate()` | LLM reads the room photo — identifies style, colors, gaps |
+| 2 | `getSemanticContext` | `pg_catalog` + `semantic_dictionary` | Schema introspection and search term expansion |
+| 3 | `hybridSearchProducts` | `ai.search()` × 6 categories | BM25 + DiskANN + semantic reranking in one call |
+| 4 | `findRelatedProducts` | Apache AGE Cypher / `bought_together` | Graph traversal for style-connected products |
+| 5 | `filterProducts` | SQL `WHERE` | Budget ceiling + minimum rating enforcement |
+| 6 | `curateRoomPicks` | `azure_ai.rank()` | Semantic reranking, best-per-category selection |
+
+### 🧱 Tech Stack
+
+- **Database:** Azure HorizonDB (PostgreSQL) with extensions: `azure_ai`, `pg_fts`, `age`, `vector`
+- **Frontend:** React 18 + Vite 6
+- **Backend:** Express 4 + node-postgres
+- **Data:** ~100K Amazon Home & Kitchen products in `product_metadata_demo`
+
+### 📁 Repository Structure
+
+```
+.
+├── README.md                                       # This file
+├── docs/
+│   └── ui-component-playbook.md                    # How the UI was built (component playbook)
+└── src/
+    ├── demo-sql/                                   # SQL scripts for the demo features
+    │   ├── data_ingest_with_ai_pipelines.sql       # AI Pipeline: chunk + embed 100K products
+    │   ├── data_retrieval_with_ai_search.sql       # Hybrid search with reranking
+    │   ├── data_graph_query.sql                    # Apache AGE graph queries
+    │   └── setup/                                  # One-time setup scripts
+    │       ├── setup.sql                           # Extensions and base config
+    │       ├── ai-search.sql                       # Search index setup
+    │       ├── graph_creation.sql                  # AGE graph schema
+    │       ├── cleanup.sql                         # Teardown script
+    │       └── data/                               # Sample data + table DDL
+    │           ├── product-sample-table.sql        # Product table DDL
+    │           └── product_sample_may13.csv        # Sample product data
+    └── zava-designer-agent-ui-demo/                # Full-stack web app
+        ├── server.js                               # Express backend — 6-tool pipeline
+        ├── package.json                            # Dependencies
+        ├── vite.config.js                          # Dev server config
+        ├── public/                                 # Room photos + logos
+        └── src/                                    # React frontend
+            ├── App.jsx                             # Main layout + state machine
+            ├── index.css                           # All styles (~2000 lines)
+            ├── main.jsx                            # React entry point
+            ├── components/                         # UI components
+            │   ├── AgentTrace.jsx                  # Tool call details overlay
+            │   ├── ChatBubble.jsx                  # Floating chat panel
+            │   ├── DesignDrawer.jsx                # Settings drawer
+            │   ├── DesignPanel.jsx                 # Design controls panel
+            │   ├── ProductCard.jsx                 # Individual product display
+            │   ├── QueryTrace.jsx                  # Pipeline steps visualization
+            │   ├── RoomView.jsx                    # Room photo + product dots
+            │   └── SuggestionsPanel.jsx            # Right sidebar with picks
+            └── data/
+                └── mockData.js                     # Fallback data for offline dev
+```
+
+### ✅ Prerequisites
+
+- **Azure HorizonDB server** with the following extensions enabled: `azure_ai`, `pg_fts`, `age`, `vector`
+- **Model Management enabled** on the HorizonDB server (Azure Portal → AI Settings → Enable Model Management) — provides `default-embedding` and `default-chat` models
+- **Node.js** 18+ and npm
+- **Product data** loaded into `product_metadata_demo` table (~100K rows)
+
+## ⚡ Quick Start
+
+### 1. Set up the database
+
+Run the setup scripts against your HorizonDB instance in order:
+
+```bash
+# Connect to your HorizonDB server with psql, then run:
+\i src/demo-sql/setup/setup.sql
+\i src/demo-sql/setup/data/product-sample-table.sql
+\i src/demo-sql/setup/ai-search.sql
+\i src/demo-sql/setup/graph_creation.sql
+```
+
+> **Note:** The `private/` folder contains internal function definitions (`ai-pipelines-setup.sql`, `ai-search-internal.sql`) that must be run on the server before the demo scripts. These are gitignored and not published — contact the demo owner for access.
+
+### 2. Load sample data
+
+```bash
+# Load product data from CSV
+\copy product_metadata_demo FROM 'src/demo-sql/setup/data/product_sample_may13.csv' WITH (FORMAT csv, HEADER true);
+```
+
+### 3. Run the demo scripts
+
+```bash
+\i src/demo-sql/data_ingest_with_ai_pipelines.sql
+\i src/demo-sql/data_retrieval_with_ai_search.sql
+\i src/demo-sql/data_graph_query.sql
+```
+
+### 4. Start the web app
+
+```bash
+cd src/zava-designer-agent-ui-demo
+
+# Create .env with your HorizonDB credentials
+cat > .env <<EOF
+PGHOST=<your-horizondb-server>.horizondb.azure.com
+PGPORT=5432
+PGDATABASE=postgres
+PGUSER=<your-username>
+PGPASSWORD=<your-password>
+EOF
+
+npm install
+npm run dev:full
+```
+
+The frontend opens at `http://localhost:5180` and proxies API calls to the Express backend on `:3001`.
+
+### 5. Use the app
+
+1. Open `http://localhost:5180`
+2. Click **"Design My Room"**
+3. Watch the 6-tool pipeline execute — room analysis → hybrid search → graph traversal → reranking
+4. Explore the product dots on the furnished room photo
+5. Click **"⚡ How did this work?"** for the pipeline visualization or **"⚙️ Agent Details"** for raw SQL + JSON traces
+
+## ✨ Key HorizonDB Features Demonstrated
+
+**⚡ AI Pipelines (`ai.create_pipeline`, `ai.run`)**
+
+ - Chunk and embed 100K products with two lines of SQL. The `on_change` trigger auto-processes new inserts.
+
+**⚡ Hybrid Search (`ai.search`)**
+
+ - BM25 full-text + DiskANN vector + RRF fusion + semantic reranking — all in a single function call, filtered by category.
+
+**⚡ Graph Traversal (Apache AGE)**
+
+ - AI-extracted style tags (`ai.extract`) build a property graph: `(:Product)-[:HAS_STYLE]->(:Style)-[:SIMILAR_TO]->(:Style)`. Cypher queries discover cross-category, cross-style recommendations.
+
+**⚡ AI Functions (`azure_ai.generate`, `azure_ai.rank`)**
+
+ - Call LLMs and rerankers directly from SQL — no external service orchestration needed.
 
 ### 🧠 Learning Outcomes
 
 By the end of this session, you will be able to:
 
-- <!-- outcome 1 -->
-- <!-- outcome 2 -->
-- <!-- outcome 3 -->
+- Stand up an end-to-end RAG pipeline inside Azure HorizonDB using `ai.create_pipeline` and `on_change` triggers to chunk and embed data automatically
+- Run **hybrid search** (BM25 + DiskANN + RRF fusion + semantic reranking) across a multi-category product catalog in a single `ai.search()` call
+- Use **Apache AGE Cypher** queries to traverse an AI-extracted property graph for style-based, cross-category product discovery
+- Orchestrate an agent that calls LLMs (`azure_ai.generate`) and rerankers (`azure_ai.rank`) directly from SQL — without external service plumbing
+- Architect an AI application where one database replaces the vector DB, graph DB, search service, and reranker tier
 
 ### 💬 Keep Learning with Copilot
 
-Try these prompts with GitHub Copilot to explore the topics from this session. Open Copilot Chat in VS Code (`Ctrl+Alt+I` on Windows/Linux, `Cmd+Shift+I` on Mac), paste a prompt, and see what you learn. Try connecting the [Microsoft Learn MCP Server](#-microsoft-learn-mcp-server) for the latest official documentation.
+Try these prompts with GitHub Copilot to explore the topics from this session. Open Copilot Chat in Visual Studio Code (`Ctrl+Alt+I` on Windows/Linux, `Cmd+Shift+I` on Mac), paste a prompt, and see what you learn. Try connecting the [Microsoft Learn MCP Server](#-microsoft-learn-mcp-server) for the latest official documentation.
 
 Use these as a starting point — or write your own!
 
-<!-- Prompts will be tailored to this session's content during repo setup. -->
-
-> *Prompts coming soon — check back after the session content is finalized.*
-
-### 💻 Technologies Used
-
-1. <!-- technology 1 -->
-1. <!-- technology 2 -->
-1. <!-- technology 3 -->
+- *"Explain how `ai.create_pipeline` in Azure HorizonDB chunks and embeds data, and how the `on_change` trigger keeps the index fresh."*
+- *"Show me how `ai.search()` combines BM25, DiskANN vector search, RRF fusion, and semantic reranking in one call. What knobs can I tune?"*
+- *"Walk me through writing an Apache AGE Cypher query that traverses `(:Product)-[:HAS_STYLE]->(:Style)-[:SIMILAR_TO]->(:Style)` to find cross-category recommendations."*
+- *"How do I call `azure_ai.generate()` and `azure_ai.rank()` from SQL? What models are available with HorizonDB Model Management?"*
+- *"Design a 6-tool agent that turns a room photo into furniture recommendations using only PostgreSQL. What does each tool do?"*
 
 ### 📚 Resources and Next Steps
 
 | Resource | Description |
 |:---------|:------------|
+| [Azure Database for PostgreSQL documentation](https://learn.microsoft.com/azure/postgresql/) | Official docs for Azure's managed PostgreSQL service (HorizonDB family) |
+| [Apache AGE documentation](https://age.apache.org/age-manual/master/index.html) | Graph extension for PostgreSQL — Cypher inside Postgres |
+| [pgvector documentation](https://github.com/pgvector/pgvector) | Vector similarity search for PostgreSQL |
+| [UI Component Playbook](./docs/ui-component-playbook.md) | How the Zava Designer Agent UI was built — component-by-component |
 | [https://aka.ms/build26-next-steps](https://aka.ms/build26-next-steps) | Explore lab and session repos to further your learning from Microsoft Build |
 
 
