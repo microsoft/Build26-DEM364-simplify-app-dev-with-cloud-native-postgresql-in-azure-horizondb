@@ -14,7 +14,7 @@ SELECT ai.create_pipeline(
         ai.embed(model => 'default-embedding', 
                  input_column => 'chunk_text',
                  dimensions => 1536,
-                 batch_size => 10)
+                 batch_size => 20)
     ],
     trigger => 'on_change'
 );
