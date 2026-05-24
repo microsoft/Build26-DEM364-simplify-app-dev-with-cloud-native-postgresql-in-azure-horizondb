@@ -102,7 +102,7 @@ INSERT INTO knowledge_base (title, content, category) VALUES
 -- ---------------------------------------------------------------------------
 UPDATE knowledge_base
 SET embedding = azure_openai.create_embeddings(
-    'text-embedding-3-small', content
+    'default-embedding', content
 )::vector
 WHERE embedding IS NULL;
 
@@ -137,7 +137,7 @@ CREATE INDEX kb_embedding_diskann_idx ON knowledge_base
 --   embedding_column text   — column for vector search (auto-detected from vector index)
 --   id_column        text   — primary key column (auto-detected)
 --   title_column     text   — display label column (defaults to content_column)
---   embedding_model  text   — model for embeddings (default 'text-embedding-3-small')
+--   embedding_model  text   — model for embeddings (default 'default-embedding')
 --   rerank_model     text   — model for reranking (default 'gpt-4.1')
 --   rerank           bool   — apply cross-encoder reranking (default false)
 --   filter           text   — optional SQL WHERE clause fragment for pre-filtering
@@ -174,7 +174,7 @@ CREATE OR REPLACE FUNCTION ai.search(
     embedding_column text    DEFAULT NULL,  -- auto-detected from vector index
     id_column        text    DEFAULT NULL,  -- auto-detected from primary key
     title_column     text    DEFAULT NULL,  -- defaults to content_column
-    embedding_model  text    DEFAULT 'text-embedding-3-small',
+    embedding_model  text    DEFAULT 'default-embedding',
     rerank_model     text    DEFAULT 'gpt-4.1',
     rerank           boolean DEFAULT false,
     filter           text    DEFAULT NULL   -- optional WHERE clause fragment for pre-filtering

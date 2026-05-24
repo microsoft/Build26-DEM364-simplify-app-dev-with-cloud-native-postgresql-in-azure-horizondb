@@ -68,6 +68,6 @@ SELECT count(*) FROM product_rag_pipeline_build_2026_output;
 SELECT *
      FROM product_rag_pipeline_build_2026_output
      ORDER BY embedding <=> azure_openai.create_embeddings(
-                                'text-embedding-3-small',
+                                'default-embedding',
                                 'Best chair that is comfortable for a living room')::vector
      LIMIT 5;

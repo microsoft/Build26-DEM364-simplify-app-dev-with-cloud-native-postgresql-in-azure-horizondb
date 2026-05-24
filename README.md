@@ -105,7 +105,7 @@ Run the setup scripts against your HorizonDB instance in order:
 
 ```bash
 # Load product data from CSV
-\copy product_metadata_demo FROM 'src/demo-sql/setup/data/product_sample_may13.csv' WITH (FORMAT csv, HEADER true);
+\copy product_sample FROM 'src/demo-sql/setup/data/product_sample_may13.csv' WITH (FORMAT csv, HEADER true);
 ```
 
 ### 3. Run the demo scripts
