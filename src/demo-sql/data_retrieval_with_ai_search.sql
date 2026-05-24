@@ -62,3 +62,34 @@ FROM ai.search(
 JOIN product_rag_pipeline_build_2026_output product_output ON product_output.id = search.id
 JOIN product_sample product ON product.id = product_output.doc_id
 WHERE product.category = 'Chairs'; -- Run across 7 categories: Chairs, Coffee Tables, Lamps & Lighting, Area Rugs, Bookcases, Storage & Organization, Wall Art.
+
+
+-- =============================================================================
+-- Product Search v2: ai.search_v2() — two-layer inlineable hybrid search
+--
+-- Same query, same results — but the planner now shows the internal shape:
+--   • ai.search_fulltext()  → BM25 scan via pgfts
+--   • ai.search_vector()    → kNN scan via pg_diskann
+--   • ai.rrf_fuse()         → Reciprocal Rank Fusion (inlined as CTEs + hash-joins)
+--
+-- No semantic reranking. Run EXPLAIN ANALYZE to see the full plan.
+-- =============================================================================
+
+-- 1. Seating — same category filter, same query, v2 API
+SELECT product.id, product.title, product.price, product.category, search.score
+FROM ai.search_v2(
+    'mid-century modern furniture for Brooklyn loft living room with wood tones and dark vibe',
+    top_k => 50) search
+JOIN product_rag_pipeline_build_2026_output product_output ON product_output.id = search.id
+JOIN product_sample product ON product.id = product_output.doc_id
+WHERE product.category = 'Chairs'; -- Run across 7 categories: Chairs, Coffee Tables, Lamps & Lighting, Area Rugs, Bookcases, Storage & Organization, Wall Art.
+
+-- 2. EXPLAIN ANALYZE — reveals the BM25 / diskann / RRF join structure
+EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF)
+SELECT product.id, product.title, product.price, product.category, search.score
+FROM ai.search_v2(
+    'mid-century modern furniture for Brooklyn loft living room with wood tones and dark vibe',
+    top_k => 50) search
+JOIN product_rag_pipeline_build_2026_output product_output ON product_output.id = search.id
+JOIN product_sample product ON product.id = product_output.doc_id
+WHERE product.category = 'Chairs';
