@@ -478,6 +478,158 @@ COMMENT ON FUNCTION ai.search(text, text, text, int, int, text, text, text, text
 
 
 -- ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+-- SECTION 3b: ai.search v2 — two-layer, inlineable refactor
+-- ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+--
+-- The ai.search() function above is a single plpgsql blob that does
+-- everything (column detection, candidate retrieval, RRF fusion, optional
+-- rerank).  Convenient, but EXPLAIN ANALYZE just shows one opaque function
+-- call — you cannot see the BM25 scan, the diskann scan, or the RRF join.
+--
+-- ai.search_v2() takes the same workload and splits it into three
+-- explicit component functions joined by a tiny top-level wrapper.  The
+-- wrapper and two of the components are LANGUAGE sql, so the planner
+-- inlines them and EXPLAIN ANALYZE reveals the underlying index scans and
+-- the RRF hash-join structure.  Semantic reranking is deliberately not
+-- included; this version focuses on showing the hybrid retrieval shape.
+--
+-- Top:        ai.search_v2(query, top_k, rrf_k, fetch_k)
+-- Components: ai.search_fulltext(query, k) → int[]
+--             ai.search_vector(qv vector, k) → int[]
+--             ai.rrf_fuse(fts_ids, vec_ids, rrf_k, top_k) → TABLE(id, score)
+--
+-- Components are hard-coded against product_rag_pipeline_build_2026_output
+-- (chunk_text fts + embedding diskann) so they can remain LANGUAGE sql
+-- (no dynamic SQL) and stay inlineable.
+-- ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+
+-- ---------------------------------------------------------------------------
+-- Component 1: full-text (BM25) search via pgfts.
+-- pgfts requires the query string to be visible at plan time so it can
+-- attach the FTS index path.  Inside a LANGUAGE sql body the literal is
+-- hidden behind a parameter and pgfts errors out, so this component is
+-- plpgsql + EXECUTE (the only non-inlineable arm).
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION ai.search_fulltext(query text, k int)
+RETURNS int[]
+LANGUAGE plpgsql
+STABLE
+SET search_path TO 'public', 'pgfts', '$user'
+AS $$
+DECLARE
+    result int[];
+BEGIN
+    EXECUTE format(
+        'SELECT ARRAY(
+             SELECT id
+             FROM public.product_rag_pipeline_build_2026_output
+             WHERE chunk_text OPERATOR(pgfts.@@?) %L
+             LIMIT %s
+         )',
+        query, k
+    ) INTO result;
+    RETURN result;
+END;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- Component 2: vector kNN over the diskann index (cosine distance).
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION ai.search_vector(qv vector, k int)
+RETURNS int[]
+LANGUAGE sql
+STABLE
+PARALLEL SAFE
+AS $$
+    SELECT ARRAY(
+        SELECT id
+        FROM public.product_rag_pipeline_build_2026_output
+        WHERE embedding IS NOT NULL
+        ORDER BY embedding <=> qv
+        LIMIT k
+    );
+$$;
+
+-- ---------------------------------------------------------------------------
+-- Component 3: Reciprocal Rank Fusion.
+-- Inputs are rank-ordered int[] (position in array = rank).  This is pure
+-- SQL and trivially inlineable, so the EXPLAIN of ai.search_v2 shows the
+-- CTE/JOIN/sort that actually performs the fusion.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION ai.rrf_fuse(
+    fts_ids int[],
+    vec_ids int[],
+    rrf_k   int DEFAULT 60,
+    top_k   int DEFAULT 10
+)
+RETURNS TABLE(id int, score real)
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+    WITH
+    fts AS (
+        SELECT t.id::int  AS id,
+               t.ord::int AS rank
+        FROM unnest(fts_ids) WITH ORDINALITY AS t(id, ord)
+    ),
+    vec AS (
+        SELECT t.id::int  AS id,
+               t.ord::int AS rank
+        FROM unnest(vec_ids) WITH ORDINALITY AS t(id, ord)
+    ),
+    all_ids AS (
+        SELECT id FROM fts
+        UNION
+        SELECT id FROM vec
+    )
+    SELECT
+        a.id,
+        (COALESCE(1.0::real / (rrf_k + f.rank), 0)
+       + COALESCE(1.0::real / (rrf_k + v.rank), 0)) AS score
+    FROM all_ids a
+    LEFT JOIN fts f ON f.id = a.id
+    LEFT JOIN vec v ON v.id = a.id
+    ORDER BY 2 DESC
+    LIMIT top_k;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- Top layer: three calls, nothing else.  When inlined by the planner the
+-- body becomes literally
+--   SELECT * FROM ai.rrf_fuse(<fts arm>, <vector arm>, rrf_k, top_k)
+-- which makes the data flow visible in EXPLAIN ANALYZE.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION ai.search_v2(
+    query   text,
+    top_k   int DEFAULT 10,
+    rrf_k   int DEFAULT 60,
+    fetch_k int DEFAULT NULL          -- per-arm candidates; default = top_k * 3
+)
+RETURNS TABLE(id int, score real)
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT *
+    FROM ai.rrf_fuse(
+        ai.search_fulltext(query, COALESCE(fetch_k, top_k * 3)),
+        ai.search_vector(
+            azure_openai.create_embeddings('default-embedding', query)::vector,
+            COALESCE(fetch_k, top_k * 3)
+        ),
+        rrf_k,
+        top_k
+    );
+$$;
+
+COMMENT ON FUNCTION ai.search_v2(text, int, int, int) IS
+'Inlineable two-layer hybrid search: ai.search_fulltext + ai.search_vector '
+'fused by ai.rrf_fuse via RRF. No reranking. Hard-coded against '
+'product_rag_pipeline_build_2026_output. Run EXPLAIN ANALYZE to see the '
+'underlying BM25 / diskann / RRF join structure.';
+
+
+-- ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 -- SECTION 4: Example Queries
 -- ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 
