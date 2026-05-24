@@ -82,7 +82,8 @@ FROM ai.search_v2(
     top_k => 50) search
 JOIN product_rag_pipeline_build_2026_output product_output ON product_output.id = search.id
 JOIN product_sample product ON product.id = product_output.doc_id
-WHERE product.category = 'Chairs'; -- Run across 7 categories: Chairs, Coffee Tables, Lamps & Lighting, Area Rugs, Bookcases, Storage & Organization, Wall Art.
+WHERE product.category = 'Chairs' -- Run across 7 categories: Chairs, Coffee Tables, Lamps & Lighting, Area Rugs, Bookcases, Storage & Organization, Wall Art.
+ORDER BY search.score DESC;
 
 -- 2. EXPLAIN ANALYZE — reveals the BM25 / diskann / RRF join structure
 EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF)
@@ -92,4 +93,5 @@ FROM ai.search_v2(
     top_k => 50) search
 JOIN product_rag_pipeline_build_2026_output product_output ON product_output.id = search.id
 JOIN product_sample product ON product.id = product_output.doc_id
-WHERE product.category = 'Chairs';
+WHERE product.category = 'Chairs'
+ORDER BY search.score DESC;
