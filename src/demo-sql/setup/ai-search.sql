@@ -175,7 +175,7 @@ CREATE OR REPLACE FUNCTION ai.search(
     id_column        text    DEFAULT NULL,  -- auto-detected from primary key
     title_column     text    DEFAULT NULL,  -- defaults to content_column
     embedding_model  text    DEFAULT 'default-embedding',
-    rerank_model     text    DEFAULT 'gpt-4.1',
+    rerank_model     text    DEFAULT 'default-chat', -- defaults to GPT model as a reranker, more accurate, but slower
     rerank           boolean DEFAULT false,
     filter           text    DEFAULT NULL   -- optional WHERE clause fragment for pre-filtering
 )
@@ -621,16 +621,30 @@ RETURNS TABLE(id int, score real)
 LANGUAGE sql
 STABLE
 AS $$
-    SELECT *
-    FROM ai.rrf_fuse(
-        ai.search_fulltext(query, COALESCE(fetch_k, top_k * 3)),
-        ai.search_vector(
+    -- Each component is wrapped in a MATERIALIZED CTE so EXPLAIN ANALYZE
+    -- shows three distinct CTE nodes — "full-text search", "vector search",
+    -- and "RRF" — with the underlying component function as a single opaque
+    -- Function Scan inside each.
+    WITH
+    "full-text search" AS MATERIALIZED (
+        SELECT ai.search_fulltext(query, COALESCE(fetch_k, top_k * 3)) AS ids
+    ),
+    "vector search" AS MATERIALIZED (
+        SELECT ai.search_vector(
             azure_openai.create_embeddings('default-embedding', query)::vector,
             COALESCE(fetch_k, top_k * 3)
-        ),
-        rrf_k,
-        top_k
-    );
+        ) AS ids
+    ),
+    "RRF" AS MATERIALIZED (
+        SELECT r.id, r.score
+        FROM ai.rrf_fuse(
+            (SELECT ids FROM "full-text search"),
+            (SELECT ids FROM "vector search"),
+            rrf_k,
+            top_k
+        ) AS r
+    )
+    SELECT id, score FROM "RRF";
 $$;
 
 COMMENT ON FUNCTION ai.search_v2(text, int, int, int) IS

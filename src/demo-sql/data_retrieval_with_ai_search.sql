@@ -50,7 +50,7 @@ $$;
 -- Searches for furniture and decor matching the room design query
 -- =============================================================================
 
--- 1. Seating
+-- 1. Search for furniture and decor matching the room design query
 SELECT product.id, product.title, product.price, product.category, search.score
 FROM ai.search(
     query => 'mid-century modern furniture for Brooklyn loft living room with wood tones and dark vibe',
@@ -58,10 +58,10 @@ FROM ai.search(
     content_column => 'chunk_text',
     embedding_column => 'embedding',
     search_type => 'hybrid',
+    rerank => true,
     top_k => 50) search 
-JOIN product_rag_pipeline_build_2026_output product_output ON product_output.id = search.id
-JOIN product_sample product ON product.id = product_output.doc_id
-WHERE product.category = 'Chairs'; -- Run across 7 categories: Chairs, Coffee Tables, Lamps & Lighting, Area Rugs, Bookcases, Storage & Organization, Wall Art.
+LEFT JOIN product_rag_pipeline_build_2026_output product_output ON product_output.id = search.id
+LEFT JOIN product_sample product ON product.id = product_output.doc_id;
 
 
 -- =============================================================================
@@ -82,8 +82,12 @@ FROM ai.search_v2(
     top_k => 50) search
 JOIN product_rag_pipeline_build_2026_output product_output ON product_output.id = search.id
 JOIN product_sample product ON product.id = product_output.doc_id
-WHERE product.category = 'Chairs' -- Run across 7 categories: Chairs, Coffee Tables, Lamps & Lighting, Area Rugs, Bookcases, Storage & Organization, Wall Art.
-ORDER BY search.score DESC;
+WHERE product.category = 'Chairs'; -- Run across 7 categories: Chairs, Coffee Tables, Lamps & Lighting, Area Rugs, Bookcases, Storage & Organization, Wall Art.
+
+SELECT *
+FROM ai.search_v2(
+    'mid-century modern furniture for Brooklyn loft living room with wood tones and dark vibe',
+    top_k => 50) search;
 
 -- 2. EXPLAIN ANALYZE — reveals the BM25 / diskann / RRF join structure
 EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF)
