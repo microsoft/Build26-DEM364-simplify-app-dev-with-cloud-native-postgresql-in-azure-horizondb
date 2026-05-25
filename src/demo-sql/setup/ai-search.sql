@@ -534,27 +534,35 @@ $$;
 
 -- ---------------------------------------------------------------------------
 -- Component 2: vector kNN over the diskann index (cosine distance).
+-- plpgsql so the planner cannot inline it — EXPLAIN ANALYZE shows this
+-- arm as an opaque Function Scan instead of leaking the diskann scan
+-- into the top-level plan.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION ai.search_vector(qv vector, k int)
 RETURNS int[]
-LANGUAGE sql
+LANGUAGE plpgsql
 STABLE
 PARALLEL SAFE
 AS $$
+DECLARE
+    result int[];
+BEGIN
     SELECT ARRAY(
         SELECT id
         FROM public.product_rag_pipeline_build_2026_output
         WHERE embedding IS NOT NULL
         ORDER BY embedding <=> qv
         LIMIT k
-    );
+    ) INTO result;
+    RETURN result;
+END;
 $$;
 
 -- ---------------------------------------------------------------------------
 -- Component 3: Reciprocal Rank Fusion.
--- Inputs are rank-ordered int[] (position in array = rank).  This is pure
--- SQL and trivially inlineable, so the EXPLAIN of ai.search_v2 shows the
--- CTE/JOIN/sort that actually performs the fusion.
+-- Inputs are rank-ordered int[] (position in array = rank).  plpgsql so the
+-- fusion machinery (unnest / UNION / LEFT JOIN / sort) stays hidden behind
+-- a single opaque node in the EXPLAIN plan.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION ai.rrf_fuse(
     fts_ids int[],
@@ -563,10 +571,12 @@ CREATE OR REPLACE FUNCTION ai.rrf_fuse(
     top_k   int DEFAULT 10
 )
 RETURNS TABLE(id int, score real)
-LANGUAGE sql
+LANGUAGE plpgsql
 IMMUTABLE
 PARALLEL SAFE
 AS $$
+BEGIN
+    RETURN QUERY
     WITH
     fts AS (
         SELECT t.id::int  AS id,
@@ -592,13 +602,14 @@ AS $$
     LEFT JOIN vec v ON v.id = a.id
     ORDER BY 2 DESC
     LIMIT top_k;
+END;
 $$;
 
 -- ---------------------------------------------------------------------------
--- Top layer: three calls, nothing else.  When inlined by the planner the
--- body becomes literally
---   SELECT * FROM ai.rrf_fuse(<fts arm>, <vector arm>, rrf_k, top_k)
--- which makes the data flow visible in EXPLAIN ANALYZE.
+-- Top layer: three calls, nothing else.  This wrapper IS LANGUAGE sql and
+-- inlines, but each of the three components is plpgsql and therefore
+-- opaque.  EXPLAIN ANALYZE thus shows exactly three function nodes —
+-- ai.search_fulltext, ai.search_vector, ai.rrf_fuse — and no internals.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION ai.search_v2(
     query   text,
