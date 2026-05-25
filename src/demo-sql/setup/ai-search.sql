@@ -579,27 +579,27 @@ BEGIN
     RETURN QUERY
     WITH
     fts AS (
-        SELECT t.id::int  AS id,
+        SELECT t.id::int  AS fts_id,
                t.ord::int AS rank
         FROM unnest(fts_ids) WITH ORDINALITY AS t(id, ord)
     ),
     vec AS (
-        SELECT t.id::int  AS id,
+        SELECT t.id::int  AS vec_id,
                t.ord::int AS rank
         FROM unnest(vec_ids) WITH ORDINALITY AS t(id, ord)
     ),
     all_ids AS (
-        SELECT id FROM fts
+        SELECT fts_id AS doc_id FROM fts
         UNION
-        SELECT id FROM vec
+        SELECT vec_id AS doc_id FROM vec
     )
     SELECT
-        a.id,
-        (COALESCE(1.0::real / (rrf_k + f.rank), 0)
-       + COALESCE(1.0::real / (rrf_k + v.rank), 0)) AS score
+        a.doc_id,
+        (COALESCE(1.0::real / (rrf_k + f.rank), 0::real)
+       + COALESCE(1.0::real / (rrf_k + v.rank), 0::real))::real AS rrf_score
     FROM all_ids a
-    LEFT JOIN fts f ON f.id = a.id
-    LEFT JOIN vec v ON v.id = a.id
+    LEFT JOIN fts f ON f.fts_id = a.doc_id
+    LEFT JOIN vec v ON v.vec_id = a.doc_id
     ORDER BY 2 DESC
     LIMIT top_k;
 END;
