@@ -493,14 +493,15 @@ COMMENT ON FUNCTION ai.search(text, text, text, int, int, text, text, text, text
 -- the RRF hash-join structure.  Semantic reranking is deliberately not
 -- included; this version focuses on showing the hybrid retrieval shape.
 --
--- Top:        ai.search_v2(query, top_k, rrf_k, fetch_k)
--- Components: ai.search_fulltext(query, k) → int[]
---             ai.search_vector(qv vector, k) → int[]
---             ai.rrf_fuse(fts_ids, vec_ids, rrf_k, top_k) → TABLE(id, score)
+-- Top:        ai.search_v2(query, source_table, content_column, [rerank,] ...)
+-- Components: ai.search_fulltext(query, k, source_table, content_column) → int[]
+--             ai.search_vector(qv vector, k, source_table)              → int[]
+--             ai.rrf_fuse(fts_ids, vec_ids, rrf_k, top_k)                → TABLE(id, score)
+--             ai.rerank(query, cand_ids, model, source_table, content_column)
 --
--- Components are hard-coded against product_rag_pipeline_build_2026_output
--- (chunk_text fts + embedding diskann) so they can remain LANGUAGE sql
--- (no dynamic SQL) and stay inlineable.
+-- source_table / content_column are required parameters; the embedding
+-- column is hard-coded to `embedding`.  search_fulltext, search_vector
+-- and rerank use EXECUTE / format(%I) for dynamic identifier safety.
 -- ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 
 -- ---------------------------------------------------------------------------
@@ -510,7 +511,12 @@ COMMENT ON FUNCTION ai.search(text, text, text, int, int, text, text, text, text
 -- hidden behind a parameter and pgfts errors out, so this component is
 -- plpgsql + EXECUTE (the only non-inlineable arm).
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION ai.search_fulltext(query text, k int)
+CREATE OR REPLACE FUNCTION ai.search_fulltext(
+    query          text,
+    k              int,
+    source_table   text DEFAULT 'product_rag_pipeline_build_2026_output',
+    content_column text DEFAULT 'chunk_text'
+)
 RETURNS int[]
 LANGUAGE plpgsql
 STABLE
@@ -522,11 +528,11 @@ BEGIN
     EXECUTE format(
         'SELECT ARRAY(
              SELECT id
-             FROM public.product_rag_pipeline_build_2026_output
-             WHERE chunk_text OPERATOR(pgfts.@@?) %L
+             FROM public.%I
+             WHERE %I OPERATOR(pgfts.@@?) %L
              LIMIT %s
          )',
-        query, k
+        source_table, content_column, query, k
     ) INTO result;
     RETURN result;
 END;
@@ -538,7 +544,11 @@ $$;
 -- arm as an opaque Function Scan instead of leaking the diskann scan
 -- into the top-level plan.
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION ai.search_vector(qv vector, k int)
+CREATE OR REPLACE FUNCTION ai.search_vector(
+    qv           vector,
+    k            int,
+    source_table text DEFAULT 'product_rag_pipeline_build_2026_output'
+)
 RETURNS int[]
 LANGUAGE plpgsql
 STABLE
@@ -547,12 +557,15 @@ AS $$
 DECLARE
     result int[];
 BEGIN
-    SELECT ARRAY(
-        SELECT id
-        FROM public.product_rag_pipeline_build_2026_output
-        WHERE embedding IS NOT NULL
-        ORDER BY embedding <=> qv
-        LIMIT k
+    EXECUTE format(
+        'SELECT ARRAY(
+             SELECT id
+             FROM public.%I
+             WHERE embedding IS NOT NULL
+             ORDER BY embedding <=> %L
+             LIMIT %s
+         )',
+        source_table, qv, k
     ) INTO result;
     RETURN result;
 END;
@@ -610,32 +623,38 @@ $$;
 -- behind a single opaque Function Scan in EXPLAIN ANALYZE.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION ai.rerank(
-    query    text,
-    cand_ids int[],                         -- candidate IDs already in best-first order
-    model    text DEFAULT 'default-chat'
+    query          text,
+    cand_ids       int[],                                                       -- candidate IDs in best-first order
+    model          text DEFAULT 'default-chat',
+    source_table   text DEFAULT 'product_rag_pipeline_build_2026_output',
+    content_column text DEFAULT 'chunk_text'
 )
 RETURNS TABLE(id int, score real)
 LANGUAGE plpgsql
 STABLE
 AS $$
+DECLARE
+    docs_contents text[];
+    docs_ids      text[];
 BEGIN
-    RETURN QUERY
-    WITH cands AS (
-        SELECT t.id::int  AS doc_id,
-               t.ord::int AS ord
-        FROM unnest(cand_ids) WITH ORDINALITY AS t(id, ord)
-    ),
-    docs AS (
-        SELECT c.doc_id, c.ord, p.chunk_text
-        FROM cands c
-        JOIN public.product_rag_pipeline_build_2026_output p ON p.id = c.doc_id
+    -- Pull chunk text for the candidate IDs, preserving their input order.
+    EXECUTE format(
+        'SELECT array_agg(p.%I ORDER BY c.ord),
+                array_agg(p.id::text ORDER BY c.ord)
+         FROM unnest($1) WITH ORDINALITY AS c(doc_id, ord)
+         JOIN public.%I p ON p.id = c.doc_id',
+        content_column, source_table
     )
+    INTO docs_contents, docs_ids
+    USING cand_ids;
+
+    RETURN QUERY
     SELECT (rr.id)::int     AS id,
            (rr.score)::real AS score
     FROM azure_ai.rank(
         query             => rerank.query,
-        document_contents => (SELECT array_agg(d.chunk_text ORDER BY d.ord) FROM docs d),
-        document_ids      => (SELECT array_agg(d.doc_id::text ORDER BY d.ord) FROM docs d),
+        document_contents => docs_contents,
+        document_ids      => docs_ids,
         model             => rerank.model
     ) rr;
 END;
@@ -645,29 +664,37 @@ $$;
 -- ---------------------------------------------------------------------------
 -- Top layer: two overloads of ai.search_v2.
 --
---   1) ai.search_v2(query, top_k, rrf_k, fetch_k)
+--   1) ai.search_v2(query, source_table, content_column,
+--                   top_k, rrf_k, fetch_k)
 --        Pure hybrid RRF — three component calls, no reranking.  STABLE.
---   2) ai.search_v2(query, rerank, top_k, rrf_k, fetch_k, rerank_model)
---        Adds an optional semantic rerank step via ai.rerank().  The
---        `rerank` parameter has no default, so callers must pass it (named
---        or positional) to select this overload — eliminating ambiguity
---        with overload #1.  STABLE so the planner inlines the SRF and
---        exposes the underlying CTE nodes in EXPLAIN ANALYZE.
+--   2) ai.search_v2(query, source_table, content_column, rerank,
+--                   top_k, rrf_k, fetch_k, rerank_model)
+--        Adds a semantic rerank step via ai.rerank().  The `rerank`
+--        parameter has no default; that is what disambiguates this
+--        overload from the no-rerank one above.
 --
--- Both wrappers are LANGUAGE sql and inline, while each underlying
--- component (search_fulltext, search_vector, rrf_fuse, rerank) is plpgsql
--- and therefore opaque in EXPLAIN ANALYZE.
+-- The first three parameters — query, source_table, content_column —
+-- are required on both overloads.  Both wrappers are LANGUAGE sql and
+-- inline, while each underlying component (search_fulltext,
+-- search_vector, rrf_fuse, rerank) is plpgsql and therefore opaque in
+-- EXPLAIN ANALYZE.
 -- ---------------------------------------------------------------------------
 DROP FUNCTION IF EXISTS ai.search_v2(text, int, int, int);
 DROP FUNCTION IF EXISTS ai.search_v2(text, int, int, int, boolean, text);
 DROP FUNCTION IF EXISTS ai.search_v2(text, boolean, int, int, int, text);
+DROP FUNCTION IF EXISTS ai.search_v2(text, int, int, int, text, text);
+DROP FUNCTION IF EXISTS ai.search_v2(text, boolean, int, int, int, text, text, text);
+DROP FUNCTION IF EXISTS ai.search_v2(text, text, text, int, int, int);
+DROP FUNCTION IF EXISTS ai.search_v2(text, text, text, boolean, int, int, int, text);
 
 -- Overload 1: no reranking.
 CREATE OR REPLACE FUNCTION ai.search_v2(
-    query   text,
-    top_k   int DEFAULT 10,
-    rrf_k   int DEFAULT 60,
-    fetch_k int DEFAULT NULL          -- per-arm candidates; default = top_k * 3
+    query          text,
+    source_table   text,
+    content_column text,
+    top_k          int DEFAULT 10,
+    rrf_k          int DEFAULT 60,
+    fetch_k        int DEFAULT NULL          -- per-arm candidates; default = top_k * 3
 )
 RETURNS TABLE(id int, score real)
 LANGUAGE sql
@@ -675,12 +702,14 @@ STABLE
 AS $$
     WITH
     "full-text search" AS MATERIALIZED (
-        SELECT ai.search_fulltext(query, COALESCE(fetch_k, top_k * 3)) AS ids
+        SELECT ai.search_fulltext(query, COALESCE(fetch_k, top_k * 3),
+                                  source_table, content_column) AS ids
     ),
     "vector search" AS MATERIALIZED (
         SELECT ai.search_vector(
             azure_openai.create_embeddings('default-embedding', query)::vector,
-            COALESCE(fetch_k, top_k * 3)
+            COALESCE(fetch_k, top_k * 3),
+            source_table
         ) AS ids
     ),
     "RRF - Reciprocal Rank Fusion: score = Σ  1 / (60 + rank_i(d))" AS MATERIALIZED (
@@ -695,23 +724,24 @@ AS $$
     SELECT id, score FROM "RRF - Reciprocal Rank Fusion: score = Σ  1 / (60 + rank_i(d))";
 $$;
 
-COMMENT ON FUNCTION ai.search_v2(text, int, int, int) IS
+COMMENT ON FUNCTION ai.search_v2(text, text, text, int, int, int) IS
 'Inlineable two-layer hybrid search: ai.search_fulltext + ai.search_vector '
-'fused by ai.rrf_fuse via RRF. No reranking. Hard-coded against '
-'product_rag_pipeline_build_2026_output. Run EXPLAIN ANALYZE to see the '
-'underlying BM25 / diskann / RRF join structure.';
+'fused by ai.rrf_fuse via RRF. No reranking. Embedding column is hard-coded '
+'to `embedding`; table and content column are required parameters. Run '
+'EXPLAIN ANALYZE to see the underlying BM25 / diskann / RRF join structure.';
 
--- Overload 2: with optional semantic reranking via azure_ai.rank().
--- `rerank` is the 2nd positional parameter with NO default — that is what
--- disambiguates this overload from the 4-arg one above.  All remaining
--- parameters carry defaults so callers normally only specify `rerank`.
+-- Overload 2: with semantic reranking via ai.rerank().
+-- `rerank` is the 4th positional parameter with NO default — that is
+-- what disambiguates this overload from the 6-arg one above.
 CREATE OR REPLACE FUNCTION ai.search_v2(
-    query        text,
-    rerank       boolean,
-    top_k        int     DEFAULT 10,
-    rrf_k        int     DEFAULT 60,
-    fetch_k      int     DEFAULT NULL,         -- per-arm candidates; default = top_k * 3
-    rerank_model text    DEFAULT 'default-chat'
+    query          text,
+    source_table   text,
+    content_column text,
+    rerank         boolean,
+    top_k          int  DEFAULT 10,
+    rrf_k          int  DEFAULT 60,
+    fetch_k        int  DEFAULT NULL,         -- per-arm candidates; default = top_k * 3
+    rerank_model   text DEFAULT 'default-chat'
 )
 RETURNS TABLE(id int, score real)
 LANGUAGE sql
@@ -719,12 +749,14 @@ STABLE
 AS $$
     WITH
     "full-text search" AS MATERIALIZED (
-        SELECT ai.search_fulltext(query, COALESCE(fetch_k, top_k * 3)) AS ids
+        SELECT ai.search_fulltext(query, COALESCE(fetch_k, top_k * 3),
+                                  source_table, content_column) AS ids
     ),
     "vector search" AS MATERIALIZED (
         SELECT ai.search_vector(
             azure_openai.create_embeddings('default-embedding', query)::vector,
-            COALESCE(fetch_k, top_k * 3)
+            COALESCE(fetch_k, top_k * 3),
+            source_table
         ) AS ids
     ),
     "RRF - Reciprocal Rank Fusion: score = Σ  1 / (60 + rank_i(d))" AS MATERIALIZED (
@@ -748,7 +780,9 @@ AS $$
                 FROM "RRF - Reciprocal Rank Fusion: score = Σ  1 / (60 + rank_i(d))"
                 ORDER BY score DESC
             ),
-            rerank_model
+            rerank_model,
+            source_table,
+            content_column
         ) AS r
     )
     SELECT id, score
@@ -761,12 +795,10 @@ AS $$
     LIMIT top_k;
 $$;
 
-COMMENT ON FUNCTION ai.search_v2(text, boolean, int, int, int, text) IS
-'Inlineable hybrid search with optional semantic reranking. Same RRF '
-'pipeline as the 4-arg overload, plus a `azure_ai.rank()` step when '
-'`rerank => true`. The `rerank` parameter is required (no default) so '
-'this overload is selected unambiguously. Hard-coded against '
-'product_rag_pipeline_build_2026_output.';
+COMMENT ON FUNCTION ai.search_v2(text, text, text, boolean, int, int, int, text) IS
+'Inlineable hybrid search with optional semantic reranking via ai.rerank(). '
+'query, source_table, content_column, and rerank are all required (no '
+'defaults). Embedding column is hard-coded to `embedding`.';
 
 
 -- ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░

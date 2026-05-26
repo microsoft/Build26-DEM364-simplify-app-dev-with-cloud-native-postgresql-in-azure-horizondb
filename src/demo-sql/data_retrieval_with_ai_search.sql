@@ -77,23 +77,29 @@ LEFT JOIN product_sample product ON product.id = product_output.doc_id;
 -- 1. Seating — same category filter, same query, v2 API
 SELECT product.id, product.title, product.price, product.category, search.score
 FROM ai.search_v2(
-    query => 'mid-century modern furniture for Brooklyn loft living room with wood tones and dark vibe',
-    rerank => true,
-    top_k => 10) search
+    query          => 'mid-century modern furniture for Brooklyn loft living room with wood tones and dark vibe',
+    source_table   => 'product_rag_pipeline_build_2026_output',
+    content_column => 'chunk_text',
+    rerank         => true,
+    top_k          => 10) search
 JOIN product_rag_pipeline_build_2026_output product_output ON product_output.id = search.id
 JOIN product_sample product ON product.id = product_output.doc_id;
 
 SELECT *
 FROM ai.search_v2(
     'mid-century modern furniture for Brooklyn loft living room with wood tones and dark vibe',
+    'product_rag_pipeline_build_2026_output',
+    'chunk_text',
     rerank => true,
-    top_k => 10) search;
+    top_k  => 10) search;
 
 -- 2. EXPLAIN ANALYZE — reveals the BM25 / diskann / RRF join structure
 EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF)
 SELECT product.id, product.title, product.price, product.category, search.score
 FROM ai.search_v2(
     'mid-century modern furniture for Brooklyn loft living room with wood tones and dark vibe',
+    'product_rag_pipeline_build_2026_output',
+    'chunk_text',
     top_k => 50) search
 JOIN product_rag_pipeline_build_2026_output product_output ON product_output.id = search.id
 JOIN product_sample product ON product.id = product_output.doc_id
