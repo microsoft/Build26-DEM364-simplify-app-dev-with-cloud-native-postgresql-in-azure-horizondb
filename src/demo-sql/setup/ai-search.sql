@@ -560,9 +560,9 @@ $$;
 
 -- ---------------------------------------------------------------------------
 -- Component 3: Reciprocal Rank Fusion.
--- Inputs are rank-ordered int[] (position in array = rank).  plpgsql so the
--- fusion machinery (unnest / UNION / LEFT JOIN / sort) stays hidden behind
--- a single opaque node in the EXPLAIN plan.
+-- Inputs are rank-ordered int[] (position in array = rank).  LANGUAGE sql
+-- with a single SELECT so the planner can inline this into the calling
+-- query (IMMUTABLE + no PL/pgSQL block).
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION ai.rrf_fuse(
     fts_ids int[],
@@ -571,12 +571,10 @@ CREATE OR REPLACE FUNCTION ai.rrf_fuse(
     top_k   int DEFAULT 10
 )
 RETURNS TABLE(id int, score real)
-LANGUAGE plpgsql
+LANGUAGE sql
 IMMUTABLE
 PARALLEL SAFE
 AS $$
-BEGIN
-    RETURN QUERY
     WITH
     fts AS (
         SELECT t.id::int  AS fts_id,
@@ -602,7 +600,6 @@ BEGIN
     LEFT JOIN vec v ON v.vec_id = a.doc_id
     ORDER BY 2 DESC
     LIMIT top_k;
-END;
 $$;
 
 -- ---------------------------------------------------------------------------
@@ -635,7 +632,7 @@ AS $$
             COALESCE(fetch_k, top_k * 3)
         ) AS ids
     ),
-    "RRF" AS MATERIALIZED (
+    "RRF - Reciprocal Rank Fusion: score = Σ  1 / (60 + rank_i(d))" AS MATERIALIZED (
         SELECT r.id, r.score
         FROM ai.rrf_fuse(
             (SELECT ids FROM "full-text search"),
@@ -644,7 +641,7 @@ AS $$
             top_k
         ) AS r
     )
-    SELECT id, score FROM "RRF";
+    SELECT id, score FROM "RRF - Reciprocal Rank Fusion: score = Σ  1 / (60 + rank_i(d))";
 $$;
 
 COMMENT ON FUNCTION ai.search_v2(text, int, int, int) IS
@@ -762,34 +759,34 @@ SELECT * FROM ai.search(
 -- ┌─────────────────────────────────────────────────────────────┐
 -- │                  ai.search(query)                           │
 -- │                                                             │
--- │  ┌──────────────────┐  ┌──────────────────┐                │
+-- │  ┌───────────────────┐  ┌──────────────────┐                │
 -- │  │     Vector        │  │    Full-Text     │                │
 -- │  │    (pgvector)     │  │    (pg_fts)      │                │
 -- │  │                   │  │                  │                │
--- │  │  cosine            │  │  BM25            │                │
--- │  │  similarity        │  │  scoring         │                │
+-- │  │  cosine           │  │  BM25            │                │
+-- │  │  similarity       │  │  scoring         │                │
 -- │  └────────┬──────────┘  └────────┬─────────┘                │
 -- │           │                      │                          │
 -- │           ▼                      ▼                          │
--- │  ┌───────────────────────────────────────────────────┐     │
--- │  │         Reciprocal Rank Fusion (RRF)              │     │
--- │  │                                                   │     │
--- │  │   score(d) = Σ  1 / (60 + rank_i(d))            │     │
--- │  └───────────────────────┬───────────────────────────┘     │
--- │                          │                                 │
--- │                          ▼                                 │
--- │  ┌───────────────────────────────────────────────────┐     │
--- │  │         Cross-Encoder Reranker                    │     │
--- │  │         (azure_ai.rank)                           │     │
--- │  │                                                   │     │
--- │  │   • Cohere Rerank v3.5 (default) or GPT-based    │     │
--- │  │   • Fine-grained query–document scoring           │     │
--- │  │   • Catches subtleties embeddings/BM25 miss       │     │
--- │  └───────────────────────┬───────────────────────────┘     │
--- │                          │                                 │
--- │                          ▼                                 │
--- │                   Top-K results                            │
--- │              (id, title, content, score)                   │
+-- │  ┌────────────────────────────────────────────────────┐     │
+-- │  │         Reciprocal Rank Fusion (RRF)               │     │
+-- │  │                                                    │     │
+-- │  │   score(d) = Σ  1 / (60 + rank_i(d))               │     │
+-- │  └───────────────────────┬────────────────────────────┘     │
+-- │                          │                                  │
+-- │                          ▼                                  │
+-- │  ┌────────────────────────────────────────────────────┐     │
+-- │  │         Cross-Encoder Reranker                     │     │
+-- │  │         (azure_ai.rank)                            │     │
+-- │  │                                                    │     │
+-- │  │   • Cohere Rerank v4.0-fast (default) or GPT-based │     │
+-- │  │   • Fine-grained query–document scoring            │     │
+-- │  │   • Catches subtleties embeddings/BM25 miss        │     │
+-- │  └───────────────────────┬────────────────────────────┘     │
+-- │                          │                                  │
+-- │                          ▼                                  │
+-- │                   Top-K results                             │
+-- │              (id, title, content, score)                    │
 -- └─────────────────────────────────────────────────────────────┘
 --
 -- Search types:
