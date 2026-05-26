@@ -603,11 +603,66 @@ AS $$
 $$;
 
 -- ---------------------------------------------------------------------------
--- Top layer: three calls, nothing else.  This wrapper IS LANGUAGE sql and
--- inlines, but each of the three components is plpgsql and therefore
--- opaque.  EXPLAIN ANALYZE thus shows exactly three function nodes —
--- ai.search_fulltext, ai.search_vector, ai.rrf_fuse — and no internals.
+-- Component 4: Semantic rerank wrapper.
+-- Takes an ordered array of candidate IDs (best-first) and returns the
+-- cross-encoder reranked scores from azure_ai.rank().  plpgsql so the
+-- join to the source table + array_agg + the rank() call stay hidden
+-- behind a single opaque Function Scan in EXPLAIN ANALYZE.
 -- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION ai.rerank(
+    query    text,
+    cand_ids int[],                         -- candidate IDs already in best-first order
+    model    text DEFAULT 'default-chat'
+)
+RETURNS TABLE(id int, score real)
+LANGUAGE plpgsql
+STABLE
+AS $$
+BEGIN
+    RETURN QUERY
+    WITH cands AS (
+        SELECT t.id::int  AS doc_id,
+               t.ord::int AS ord
+        FROM unnest(cand_ids) WITH ORDINALITY AS t(id, ord)
+    ),
+    docs AS (
+        SELECT c.doc_id, c.ord, p.chunk_text
+        FROM cands c
+        JOIN public.product_rag_pipeline_build_2026_output p ON p.id = c.doc_id
+    )
+    SELECT (rr.id)::int     AS id,
+           (rr.score)::real AS score
+    FROM azure_ai.rank(
+        query             => rerank.query,
+        document_contents => (SELECT array_agg(d.chunk_text ORDER BY d.ord) FROM docs d),
+        document_ids      => (SELECT array_agg(d.doc_id::text ORDER BY d.ord) FROM docs d),
+        model             => rerank.model
+    ) rr;
+END;
+$$;
+
+
+-- ---------------------------------------------------------------------------
+-- Top layer: two overloads of ai.search_v2.
+--
+--   1) ai.search_v2(query, top_k, rrf_k, fetch_k)
+--        Pure hybrid RRF — three component calls, no reranking.  STABLE.
+--   2) ai.search_v2(query, rerank, top_k, rrf_k, fetch_k, rerank_model)
+--        Adds an optional semantic rerank step via ai.rerank().  The
+--        `rerank` parameter has no default, so callers must pass it (named
+--        or positional) to select this overload — eliminating ambiguity
+--        with overload #1.  STABLE so the planner inlines the SRF and
+--        exposes the underlying CTE nodes in EXPLAIN ANALYZE.
+--
+-- Both wrappers are LANGUAGE sql and inline, while each underlying
+-- component (search_fulltext, search_vector, rrf_fuse, rerank) is plpgsql
+-- and therefore opaque in EXPLAIN ANALYZE.
+-- ---------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS ai.search_v2(text, int, int, int);
+DROP FUNCTION IF EXISTS ai.search_v2(text, int, int, int, boolean, text);
+DROP FUNCTION IF EXISTS ai.search_v2(text, boolean, int, int, int, text);
+
+-- Overload 1: no reranking.
 CREATE OR REPLACE FUNCTION ai.search_v2(
     query   text,
     top_k   int DEFAULT 10,
@@ -618,10 +673,6 @@ RETURNS TABLE(id int, score real)
 LANGUAGE sql
 STABLE
 AS $$
-    -- Each component is wrapped in a MATERIALIZED CTE so EXPLAIN ANALYZE
-    -- shows three distinct CTE nodes — "full-text search", "vector search",
-    -- and "RRF" — with the underlying component function as a single opaque
-    -- Function Scan inside each.
     WITH
     "full-text search" AS MATERIALIZED (
         SELECT ai.search_fulltext(query, COALESCE(fetch_k, top_k * 3)) AS ids
@@ -649,6 +700,73 @@ COMMENT ON FUNCTION ai.search_v2(text, int, int, int) IS
 'fused by ai.rrf_fuse via RRF. No reranking. Hard-coded against '
 'product_rag_pipeline_build_2026_output. Run EXPLAIN ANALYZE to see the '
 'underlying BM25 / diskann / RRF join structure.';
+
+-- Overload 2: with optional semantic reranking via azure_ai.rank().
+-- `rerank` is the 2nd positional parameter with NO default — that is what
+-- disambiguates this overload from the 4-arg one above.  All remaining
+-- parameters carry defaults so callers normally only specify `rerank`.
+CREATE OR REPLACE FUNCTION ai.search_v2(
+    query        text,
+    rerank       boolean,
+    top_k        int     DEFAULT 10,
+    rrf_k        int     DEFAULT 60,
+    fetch_k      int     DEFAULT NULL,         -- per-arm candidates; default = top_k * 3
+    rerank_model text    DEFAULT 'default-chat'
+)
+RETURNS TABLE(id int, score real)
+LANGUAGE sql
+STABLE
+AS $$
+    WITH
+    "full-text search" AS MATERIALIZED (
+        SELECT ai.search_fulltext(query, COALESCE(fetch_k, top_k * 3)) AS ids
+    ),
+    "vector search" AS MATERIALIZED (
+        SELECT ai.search_vector(
+            azure_openai.create_embeddings('default-embedding', query)::vector,
+            COALESCE(fetch_k, top_k * 3)
+        ) AS ids
+    ),
+    "RRF - Reciprocal Rank Fusion: score = Σ  1 / (60 + rank_i(d))" AS MATERIALIZED (
+        SELECT r.id, r.score
+        FROM ai.rrf_fuse(
+            (SELECT ids FROM "full-text search"),
+            (SELECT ids FROM "vector search"),
+            rrf_k,
+            -- Pull a wider candidate set when reranking so the cross-encoder
+            -- has room to reorder; otherwise just return top_k.
+            CASE WHEN rerank THEN top_k * 3 ELSE top_k END
+        ) AS r
+    ),
+    "semantic rerank" AS MATERIALIZED (
+        SELECT r.id, r.score
+        FROM (SELECT 1 WHERE rerank) AS g,
+        LATERAL ai.rerank(
+            query,
+            ARRAY(
+                SELECT id
+                FROM "RRF - Reciprocal Rank Fusion: score = Σ  1 / (60 + rank_i(d))"
+                ORDER BY score DESC
+            ),
+            rerank_model
+        ) AS r
+    )
+    SELECT id, score
+    FROM "semantic rerank"
+    UNION ALL
+    SELECT id, score
+    FROM "RRF - Reciprocal Rank Fusion: score = Σ  1 / (60 + rank_i(d))"
+    WHERE NOT rerank
+    ORDER BY 2 DESC
+    LIMIT top_k;
+$$;
+
+COMMENT ON FUNCTION ai.search_v2(text, boolean, int, int, int, text) IS
+'Inlineable hybrid search with optional semantic reranking. Same RRF '
+'pipeline as the 4-arg overload, plus a `azure_ai.rank()` step when '
+'`rerank => true`. The `rerank` parameter is required (no default) so '
+'this overload is selected unambiguously. Hard-coded against '
+'product_rag_pipeline_build_2026_output.';
 
 
 -- ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
