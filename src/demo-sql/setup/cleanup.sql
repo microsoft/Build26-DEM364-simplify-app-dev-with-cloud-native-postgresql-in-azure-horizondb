@@ -12,3 +12,5 @@ WHERE title = 'New Chair for Living Room';
 
 DELETE FROM style_tagger_output
  WHERE title = 'New Chair for Living Room';
+
+SELECT ai.drop('style_tagger');

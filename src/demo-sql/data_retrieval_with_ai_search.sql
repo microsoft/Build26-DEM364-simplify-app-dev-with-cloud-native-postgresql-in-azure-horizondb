@@ -58,7 +58,6 @@ FROM ai.search(
     content_column => 'chunk_text',
     embedding_column => 'embedding',
     search_type => 'hybrid',
-    rerank => true,
     top_k => 50) search 
 LEFT JOIN product_rag_pipeline_build_2026_output product_output ON product_output.id = search.id
 LEFT JOIN product_sample product ON product.id = product_output.doc_id;
@@ -78,16 +77,17 @@ LEFT JOIN product_sample product ON product.id = product_output.doc_id;
 -- 1. Seating — same category filter, same query, v2 API
 SELECT product.id, product.title, product.price, product.category, search.score
 FROM ai.search_v2(
-    'mid-century modern furniture for Brooklyn loft living room with wood tones and dark vibe',
-    top_k => 50) search
+    query => 'mid-century modern furniture for Brooklyn loft living room with wood tones and dark vibe',
+    rerank => true,
+    top_k => 10) search
 JOIN product_rag_pipeline_build_2026_output product_output ON product_output.id = search.id
-JOIN product_sample product ON product.id = product_output.doc_id
-WHERE product.category = 'Chairs'; -- Run across 7 categories: Chairs, Coffee Tables, Lamps & Lighting, Area Rugs, Bookcases, Storage & Organization, Wall Art.
+JOIN product_sample product ON product.id = product_output.doc_id;
 
 SELECT *
 FROM ai.search_v2(
     'mid-century modern furniture for Brooklyn loft living room with wood tones and dark vibe',
-    top_k => 50) search;
+    rerank => true,
+    top_k => 10) search;
 
 -- 2. EXPLAIN ANALYZE — reveals the BM25 / diskann / RRF join structure
 EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF)

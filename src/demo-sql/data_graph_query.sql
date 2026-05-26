@@ -20,8 +20,8 @@ SELECT ai.create_pipeline(
 );
 
 SELECT ai.run('style_tagger');
+SELECT * FROM ai.status('style_tagger');
 
--- SELECT ai.drop('style_tagger');
 
 
 -- ─── ACT 3 setup: Flash style pipeline output (~1 min) ─────────────────────
