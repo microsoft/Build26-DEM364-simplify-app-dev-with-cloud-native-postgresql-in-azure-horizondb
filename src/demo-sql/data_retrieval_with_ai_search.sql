@@ -80,6 +80,7 @@ FROM ai.search_v2(
     query          => 'mid-century modern furniture for Brooklyn loft living room with wood tones and dark vibe',
     source_table   => 'product_rag_pipeline_build_2026_output',
     content_column => 'chunk_text',
+    search_type    => 'hybrid',
     rerank         => true,
     top_k          => 10) search
 JOIN product_rag_pipeline_build_2026_output product_output ON product_output.id = search.id
@@ -90,8 +91,9 @@ FROM ai.search_v2(
     'mid-century modern furniture for Brooklyn loft living room with wood tones and dark vibe',
     'product_rag_pipeline_build_2026_output',
     'chunk_text',
-    rerank => true,
-    top_k  => 10) search;
+    search_type => 'hybrid',
+    rerank      => true,
+    top_k       => 10) search;
 
 -- 2. EXPLAIN ANALYZE — reveals the BM25 / diskann / RRF join structure
 EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF)
@@ -100,7 +102,8 @@ FROM ai.search_v2(
     'mid-century modern furniture for Brooklyn loft living room with wood tones and dark vibe',
     'product_rag_pipeline_build_2026_output',
     'chunk_text',
-    top_k => 50) search
+    search_type => 'hybrid',
+    top_k       => 50) search
 JOIN product_rag_pipeline_build_2026_output product_output ON product_output.id = search.id
 JOIN product_sample product ON product.id = product_output.doc_id
 WHERE product.category = 'Chairs'

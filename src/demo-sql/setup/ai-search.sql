@@ -692,6 +692,7 @@ CREATE OR REPLACE FUNCTION ai.search_v2(
     query          text,
     source_table   text,
     content_column text,
+    search_type    text DEFAULT 'hybrid',          -- 'hybrid' | 'vector' | 'fulltext'
     top_k          int DEFAULT 10,
     rrf_k          int DEFAULT 60,
     fetch_k        int DEFAULT NULL          -- per-arm candidates; default = top_k * 3
@@ -702,15 +703,23 @@ STABLE
 AS $$
     WITH
     "full-text search" AS MATERIALIZED (
-        SELECT ai.search_fulltext(query, COALESCE(fetch_k, top_k * 3),
-                                  source_table, content_column) AS ids
+        SELECT s.ids
+        FROM (SELECT 1 WHERE search_type IN ('fulltext','hybrid')) AS g,
+             LATERAL (SELECT ai.search_fulltext(query, COALESCE(fetch_k, top_k * 3),
+                                                source_table, content_column) AS ids) s
+        UNION ALL
+        SELECT '{}'::int[] AS ids WHERE search_type NOT IN ('fulltext','hybrid')
     ),
     "vector search" AS MATERIALIZED (
-        SELECT ai.search_vector(
-            azure_openai.create_embeddings('default-embedding', query)::vector,
-            COALESCE(fetch_k, top_k * 3),
-            source_table
-        ) AS ids
+        SELECT s.ids
+        FROM (SELECT 1 WHERE search_type IN ('vector','hybrid')) AS g,
+             LATERAL (SELECT ai.search_vector(
+                 azure_openai.create_embeddings('default-embedding', query)::vector,
+                 COALESCE(fetch_k, top_k * 3),
+                 source_table
+             ) AS ids) s
+        UNION ALL
+        SELECT '{}'::int[] AS ids WHERE search_type NOT IN ('vector','hybrid')
     ),
     "RRF - Reciprocal Rank Fusion: score = Σ  1 / (60 + rank_i(d))" AS MATERIALIZED (
         SELECT r.id, r.score
@@ -724,19 +733,20 @@ AS $$
     SELECT id, score FROM "RRF - Reciprocal Rank Fusion: score = Σ  1 / (60 + rank_i(d))";
 $$;
 
-COMMENT ON FUNCTION ai.search_v2(text, text, text, int, int, int) IS
+COMMENT ON FUNCTION ai.search_v2(text, text, text, text, int, int, int) IS
 'Inlineable two-layer hybrid search: ai.search_fulltext + ai.search_vector '
-'fused by ai.rrf_fuse via RRF. No reranking. Embedding column is hard-coded '
-'to `embedding`; table and content column are required parameters. Run '
-'EXPLAIN ANALYZE to see the underlying BM25 / diskann / RRF join structure.';
+'fused by ai.rrf_fuse via RRF. No reranking. `search_type` selects which '
+'retrieval arms run: ''hybrid'' (default), ''vector'', or ''fulltext''. '
+'Embedding column is hard-coded to `embedding`.';
 
 -- Overload 2: with semantic reranking via ai.rerank().
--- `rerank` is the 4th positional parameter with NO default — that is
--- what disambiguates this overload from the 6-arg one above.
+-- `rerank` has NO default — that disambiguates this overload from the
+-- no-rerank one above.
 CREATE OR REPLACE FUNCTION ai.search_v2(
     query          text,
     source_table   text,
     content_column text,
+    search_type    text,                            -- 'hybrid' | 'vector' | 'fulltext'
     rerank         boolean,
     top_k          int  DEFAULT 10,
     rrf_k          int  DEFAULT 60,
@@ -749,15 +759,23 @@ STABLE
 AS $$
     WITH
     "full-text search" AS MATERIALIZED (
-        SELECT ai.search_fulltext(query, COALESCE(fetch_k, top_k * 3),
-                                  source_table, content_column) AS ids
+        SELECT s.ids
+        FROM (SELECT 1 WHERE search_type IN ('fulltext','hybrid')) AS g,
+             LATERAL (SELECT ai.search_fulltext(query, COALESCE(fetch_k, top_k * 3),
+                                                source_table, content_column) AS ids) s
+        UNION ALL
+        SELECT '{}'::int[] AS ids WHERE search_type NOT IN ('fulltext','hybrid')
     ),
     "vector search" AS MATERIALIZED (
-        SELECT ai.search_vector(
-            azure_openai.create_embeddings('default-embedding', query)::vector,
-            COALESCE(fetch_k, top_k * 3),
-            source_table
-        ) AS ids
+        SELECT s.ids
+        FROM (SELECT 1 WHERE search_type IN ('vector','hybrid')) AS g,
+             LATERAL (SELECT ai.search_vector(
+                 azure_openai.create_embeddings('default-embedding', query)::vector,
+                 COALESCE(fetch_k, top_k * 3),
+                 source_table
+             ) AS ids) s
+        UNION ALL
+        SELECT '{}'::int[] AS ids WHERE search_type NOT IN ('vector','hybrid')
     ),
     "RRF - Reciprocal Rank Fusion: score = Σ  1 / (60 + rank_i(d))" AS MATERIALIZED (
         SELECT r.id, r.score
@@ -795,10 +813,11 @@ AS $$
     LIMIT top_k;
 $$;
 
-COMMENT ON FUNCTION ai.search_v2(text, text, text, boolean, int, int, int, text) IS
+COMMENT ON FUNCTION ai.search_v2(text, text, text, text, boolean, int, int, int, text) IS
 'Inlineable hybrid search with optional semantic reranking via ai.rerank(). '
-'query, source_table, content_column, and rerank are all required (no '
-'defaults). Embedding column is hard-coded to `embedding`.';
+'query, source_table, content_column, search_type, and rerank are all '
+'required (no defaults). `search_type` is ''hybrid'' | ''vector'' | '
+'''fulltext''. Embedding column is hard-coded to `embedding`.';
 
 
 -- ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
