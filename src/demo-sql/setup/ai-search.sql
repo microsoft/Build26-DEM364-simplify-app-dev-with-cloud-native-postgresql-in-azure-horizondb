@@ -1,5 +1,5 @@
 -- =============================================================================
--- ai.search() — Unified Multi-Modal Search for PostgreSQL
+-- ai.search_orig() — Unified Multi-Modal Search for PostgreSQL
 -- Azure Database for PostgreSQL
 -- =============================================================================
 --
@@ -7,12 +7,12 @@
 -- and hybrid search (vector + fulltext fused via Reciprocal Rank Fusion).
 --
 -- Usage:
---   SELECT * FROM ai.search('how do I scale PostgreSQL?');
---   SELECT * FROM ai.search('replication lag', search_type => 'fulltext');
---   SELECT * FROM ai.search('backup strategy', search_type => 'vector');
---   SELECT * FROM ai.search('disaster recovery', top_k => 5);
---   SELECT * FROM ai.search('vector index', rerank => false);
---   SELECT * FROM ai.search('RAG pipeline',
+--   SELECT * FROM ai.search_orig('how do I scale PostgreSQL?');
+--   SELECT * FROM ai.search_orig('replication lag', search_type => 'fulltext');
+--   SELECT * FROM ai.search_orig('backup strategy', search_type => 'vector');
+--   SELECT * FROM ai.search_orig('disaster recovery', top_k => 5);
+--   SELECT * FROM ai.search_orig('vector index', rerank => false);
+--   SELECT * FROM ai.search_orig('RAG pipeline',
 --       embedding_model => 'text-embedding-3-large',
 --       rerank_model    => 'gpt-4.1');
 --
@@ -118,13 +118,13 @@ CREATE INDEX kb_content_bm25_idx ON knowledge_base USING fts (content text_fts_o
 CREATE INDEX kb_embedding_diskann_idx ON knowledge_base
     USING diskann (embedding vector_cosine_ops);
 
--- Reciprocal Rank Fusion (RRF) is applied inline inside ai.search.
+-- Reciprocal Rank Fusion (RRF) is applied inline inside ai.search_orig.
 -- RRF formula:  score(d) = Σ  1 / (k + rank_i(d))
 -- where k = 60 (standard constant), and i iterates over each ranker.
 
 
 -- ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
--- SECTION 3: ai.search()  — The Main Entry Point
+-- SECTION 3: ai.search_orig()  — The Main Entry Point
 -- ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 --
 -- Parameters:
@@ -160,11 +160,11 @@ CREATE INDEX kb_embedding_diskann_idx ON knowledge_base
 --   4. Return top_k results
 -- ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 
-DROP FUNCTION IF EXISTS ai.search(text, text, int, int, int, text, text, boolean);
-DROP FUNCTION IF EXISTS ai.search(text, text, text, int, int, int, text, text, text, text, text, text, boolean);
-DROP FUNCTION IF EXISTS ai.search(text, text, text, int, int, text, text, text, text, text, text, boolean);
-DROP FUNCTION IF EXISTS ai.search(text, text, text, int, int, text, text, text, text, text, text, boolean, text);
-CREATE OR REPLACE FUNCTION ai.search(
+DROP FUNCTION IF EXISTS ai.search_orig(text, text, int, int, int, text, text, boolean);
+DROP FUNCTION IF EXISTS ai.search_orig(text, text, text, int, int, int, text, text, text, text, text, text, boolean);
+DROP FUNCTION IF EXISTS ai.search_orig(text, text, text, int, int, text, text, text, text, text, text, boolean);
+DROP FUNCTION IF EXISTS ai.search_orig(text, text, text, int, int, text, text, text, text, text, text, boolean, text);
+CREATE OR REPLACE FUNCTION ai.search_orig(
     query            text,
     source_table     text    DEFAULT 'knowledge_base',
     search_type      text    DEFAULT 'hybrid',
@@ -218,7 +218,7 @@ BEGIN
     -- =================================================================
     -- Column Auto-Detection from Indexes
     -- =================================================================
-    -- Customers create their table with the right indexes and ai.search()
+    -- Customers create their table with the right indexes and ai.search_orig()
     -- figures out which columns to use. No configuration needed.
     --
     --   CREATE TABLE my_docs (
@@ -229,7 +229,7 @@ BEGIN
     --   CREATE INDEX ON my_docs USING fts (body text_fts_ops);     -- → content
     --   CREATE INDEX ON my_docs USING diskann (vec vector_cosine_ops); -- → embedding
     --
-    --   SELECT * FROM ai.search('query', source_table => 'my_docs');
+    --   SELECT * FROM ai.search_orig('query', source_table => 'my_docs');
     -- =================================================================
 
     -- Primary key → id_column
@@ -269,9 +269,9 @@ BEGIN
     -- Title defaults to content column if not specified
     _title_col := COALESCE(title_column, _content_col);
 
-    RAISE NOTICE '[ai.search] START  query=% type=% top_k=% rerank=%',
+    RAISE NOTICE '[ai.search_orig] START  query=% type=% top_k=% rerank=%',
         left(query, 80), search_type, top_k, rerank;
-    RAISE NOTICE '[ai.search] AUTO-DETECT  table=% id=% title=% content=% embedding=%',
+    RAISE NOTICE '[ai.search_orig] AUTO-DETECT  table=% id=% title=% content=% embedding=%',
         _tbl, _id_col, _title_col, _content_col, _emb_col;
 
     -- Validate we found what we need
@@ -299,9 +299,9 @@ BEGIN
 
     -- Generate query embedding when needed
     IF search_type IN ('vector', 'hybrid') THEN
-        RAISE NOTICE '[ai.search] Generating embedding via % ...', embedding_model;
+        RAISE NOTICE '[ai.search_orig] Generating embedding via % ...', embedding_model;
         query_embedding := azure_openai.create_embeddings(embedding_model, query)::vector;
-        RAISE NOTICE '[ai.search] Embedding done  (+% ms)',
+        RAISE NOTICE '[ai.search_orig] Embedding done  (+% ms)',
             extract(milliseconds from clock_timestamp() - _phase_ts)::int;
         _phase_ts := clock_timestamp();
     END IF;
@@ -330,7 +330,7 @@ BEGIN
             _emb_col
         ) USING query_embedding, fetch_limit;
         GET DIAGNOSTICS _candidate_cnt = ROW_COUNT;
-        RAISE NOTICE '[ai.search] Vector search found % candidates  (+% ms)',
+        RAISE NOTICE '[ai.search_orig] Vector search found % candidates  (+% ms)',
             _candidate_cnt, extract(milliseconds from clock_timestamp() - _phase_ts)::int;
         _phase_ts := clock_timestamp();
 
@@ -354,7 +354,7 @@ BEGIN
             _content_col, query
         ) USING fetch_limit;
         GET DIAGNOSTICS _candidate_cnt = ROW_COUNT;
-        RAISE NOTICE '[ai.search] Fulltext search found % candidates  (+% ms)',
+        RAISE NOTICE '[ai.search_orig] Fulltext search found % candidates  (+% ms)',
             _candidate_cnt, extract(milliseconds from clock_timestamp() - _phase_ts)::int;
         _phase_ts := clock_timestamp();
 
@@ -376,7 +376,7 @@ BEGIN
             _id_col, _tbl, _content_col, query
         ) USING fetch_limit;
         GET DIAGNOSTICS _candidate_cnt = ROW_COUNT;
-        RAISE NOTICE '[ai.search] Hybrid: fulltext ranker found % docs  (+% ms)',
+        RAISE NOTICE '[ai.search_orig] Hybrid: fulltext ranker found % docs  (+% ms)',
             _candidate_cnt, extract(milliseconds from clock_timestamp() - _phase_ts)::int;
         _phase_ts := clock_timestamp();
 
@@ -417,7 +417,7 @@ BEGIN
             _id_col, _title_col, _content_col, _tbl, _id_col
         ) USING query_embedding, fetch_limit, rrf_k;
         GET DIAGNOSTICS _candidate_cnt = ROW_COUNT;
-        RAISE NOTICE '[ai.search] Hybrid: RRF fusion produced % candidates  (+% ms)',
+        RAISE NOTICE '[ai.search_orig] Hybrid: RRF fusion produced % candidates  (+% ms)',
             _candidate_cnt, extract(milliseconds from clock_timestamp() - _phase_ts)::int;
         _phase_ts := clock_timestamp();
 
@@ -430,7 +430,7 @@ BEGIN
     -- =================================================================
 
     IF rerank THEN
-        RAISE NOTICE '[ai.search] Reranking % candidates via % ...',
+        RAISE NOTICE '[ai.search_orig] Reranking % candidates via % ...',
             (SELECT count(*) FROM _search_candidates), rerank_model;
         _phase_ts := clock_timestamp();
         RETURN QUERY
@@ -454,7 +454,7 @@ BEGIN
         ) rr ON rr.id = c._id::text
         ORDER BY rr.score DESC
         LIMIT top_k;
-        RAISE NOTICE '[ai.search] Rerank done  (+% ms)',
+        RAISE NOTICE '[ai.search_orig] Rerank done  (+% ms)',
             extract(milliseconds from clock_timestamp() - _phase_ts)::int;
     ELSE
         RETURN QUERY
@@ -464,36 +464,36 @@ BEGIN
         LIMIT top_k;
     END IF;
 
-    RAISE NOTICE '[ai.search] DONE  total=% ms',
+    RAISE NOTICE '[ai.search_orig] DONE  total=% ms',
         extract(milliseconds from clock_timestamp() - _start_ts)::int;
 END;
 $$;
 
-COMMENT ON FUNCTION ai.search(text, text, text, int, int, text, text, text, text, text, text, boolean, text) IS
+COMMENT ON FUNCTION ai.search_orig(text, text, text, int, int, text, text, text, text, text, text, boolean, text) IS
 'Unified search over any table. Auto-detects columns from indexes: '
 'primary key → id, BM25 (fts) index → content, vector index → embedding. '
 'Supports vector, fulltext (BM25), and hybrid (RRF) search with optional pre-filtering. '
 'Optionally reranks with azure_ai.rank(). Just point it at your table: '
-'SELECT * FROM ai.search(''query'', source_table => ''my_docs'');';
+'SELECT * FROM ai.search_orig(''query'', source_table => ''my_docs'');';
 
 
 -- ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
--- SECTION 3b: ai.search v2 — two-layer, inlineable refactor
+-- SECTION 3b: ai.search — two-layer, inlineable refactor (was ai.search_v2)
 -- ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 --
--- The ai.search() function above is a single plpgsql blob that does
+-- The ai.search_orig() function above is a single plpgsql blob that does
 -- everything (column detection, candidate retrieval, RRF fusion, optional
 -- rerank).  Convenient, but EXPLAIN ANALYZE just shows one opaque function
 -- call — you cannot see the BM25 scan, the diskann scan, or the RRF join.
 --
--- ai.search_v2() takes the same workload and splits it into three
+-- ai.search() takes the same workload and splits it into three
 -- explicit component functions joined by a tiny top-level wrapper.  The
 -- wrapper and two of the components are LANGUAGE sql, so the planner
 -- inlines them and EXPLAIN ANALYZE reveals the underlying index scans and
 -- the RRF hash-join structure.  Semantic reranking is deliberately not
 -- included; this version focuses on showing the hybrid retrieval shape.
 --
--- Top:        ai.search_v2(query, source_table, content_column, [rerank,] ...)
+-- Top:        ai.search(query, source_table, content_column, [rerank,] ...)
 -- Components: ai.search_fulltext(query, k, source_table, content_column) → int[]
 --             ai.search_vector(qv vector, k, source_table)              → int[]
 --             ai.rrf_fuse(fts_ids, vec_ids, rrf_k, top_k)                → TABLE(id, score)
@@ -662,12 +662,12 @@ $$;
 
 
 -- ---------------------------------------------------------------------------
--- Top layer: two overloads of ai.search_v2.
+-- Top layer: two overloads of ai.search.
 --
---   1) ai.search_v2(query, source_table, content_column,
+--   1) ai.search(query, source_table, content_column,
 --                   top_k, rrf_k, fetch_k)
 --        Pure hybrid RRF — three component calls, no reranking.  STABLE.
---   2) ai.search_v2(query, source_table, content_column, rerank,
+--   2) ai.search(query, source_table, content_column, rerank,
 --                   top_k, rrf_k, fetch_k, rerank_model)
 --        Adds a semantic rerank step via ai.rerank().  The `rerank`
 --        parameter has no default; that is what disambiguates this
@@ -679,16 +679,16 @@ $$;
 -- search_vector, rrf_fuse, rerank) is plpgsql and therefore opaque in
 -- EXPLAIN ANALYZE.
 -- ---------------------------------------------------------------------------
-DROP FUNCTION IF EXISTS ai.search_v2(text, int, int, int);
-DROP FUNCTION IF EXISTS ai.search_v2(text, int, int, int, boolean, text);
-DROP FUNCTION IF EXISTS ai.search_v2(text, boolean, int, int, int, text);
-DROP FUNCTION IF EXISTS ai.search_v2(text, int, int, int, text, text);
-DROP FUNCTION IF EXISTS ai.search_v2(text, boolean, int, int, int, text, text, text);
-DROP FUNCTION IF EXISTS ai.search_v2(text, text, text, int, int, int);
-DROP FUNCTION IF EXISTS ai.search_v2(text, text, text, boolean, int, int, int, text);
+DROP FUNCTION IF EXISTS ai.search(text, int, int, int);
+DROP FUNCTION IF EXISTS ai.search(text, int, int, int, boolean, text);
+DROP FUNCTION IF EXISTS ai.search(text, boolean, int, int, int, text);
+DROP FUNCTION IF EXISTS ai.search(text, int, int, int, text, text);
+DROP FUNCTION IF EXISTS ai.search(text, boolean, int, int, int, text, text, text);
+DROP FUNCTION IF EXISTS ai.search(text, text, text, int, int, int);
+DROP FUNCTION IF EXISTS ai.search(text, text, text, boolean, int, int, int, text);
 
 -- Overload 1: no reranking.
-CREATE OR REPLACE FUNCTION ai.search_v2(
+CREATE OR REPLACE FUNCTION ai.search(
     query          text,
     source_table   text,
     content_column text,
@@ -733,7 +733,7 @@ AS $$
     SELECT id, score FROM "RRF - Reciprocal Rank Fusion: score = Σ  1 / (60 + rank_i(d))";
 $$;
 
-COMMENT ON FUNCTION ai.search_v2(text, text, text, text, int, int, int) IS
+COMMENT ON FUNCTION ai.search(text, text, text, text, int, int, int) IS
 'Inlineable two-layer hybrid search: ai.search_fulltext + ai.search_vector '
 'fused by ai.rrf_fuse via RRF. No reranking. `search_type` selects which '
 'retrieval arms run: ''hybrid'' (default), ''vector'', or ''fulltext''. '
@@ -742,7 +742,7 @@ COMMENT ON FUNCTION ai.search_v2(text, text, text, text, int, int, int) IS
 -- Overload 2: with semantic reranking via ai.rerank().
 -- `rerank` has NO default — that disambiguates this overload from the
 -- no-rerank one above.
-CREATE OR REPLACE FUNCTION ai.search_v2(
+CREATE OR REPLACE FUNCTION ai.search(
     query          text,
     source_table   text,
     content_column text,
@@ -813,7 +813,7 @@ AS $$
     LIMIT top_k;
 $$;
 
-COMMENT ON FUNCTION ai.search_v2(text, text, text, text, boolean, int, int, int, text) IS
+COMMENT ON FUNCTION ai.search(text, text, text, text, boolean, int, int, int, text) IS
 'Inlineable hybrid search with optional semantic reranking via ai.rerank(). '
 'query, source_table, content_column, search_type, and rerank are all '
 'required (no defaults). `search_type` is ''hybrid'' | ''vector'' | '
@@ -825,20 +825,20 @@ COMMENT ON FUNCTION ai.search_v2(text, text, text, text, boolean, int, int, int,
 -- ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 
 -- 4a. Default: searches 'knowledge_base' — columns auto-detected from indexes
-SELECT * FROM ai.search(
+SELECT * FROM ai.search_orig(
     'how do I set up disaster recovery for PostgreSQL?',
     rerank => false
 );
 
 -- 4b. Vector-only search (auto-detects embedding column from vector index)
-SELECT * FROM ai.search(
+SELECT * FROM ai.search_orig(
     'scaling read-heavy workloads',
     search_type => 'vector',
     rerank => false
 );
 
 -- 4c. Full-text only (auto-detects content column from BM25 fts index)
-SELECT * FROM ai.search(
+SELECT * FROM ai.search_orig(
     'replication slots WAL',
     search_type => 'fulltext',
     rerank => false
@@ -846,13 +846,13 @@ SELECT * FROM ai.search(
 
 -- 4d. Point at a different table — columns auto-detected from its indexes
 --     (Requires: my_articles table with fts + vector indexes)
--- SELECT * FROM ai.search(
+-- SELECT * FROM ai.search_orig(
 --     'machine learning pipelines',
 --     source_table => 'my_articles'
 -- );
 
 -- 4e. Override specific columns (when auto-detection picks wrong one)
--- SELECT * FROM ai.search(
+-- SELECT * FROM ai.search_orig(
 --     'machine learning pipelines',
 --     source_table     => 'articles',
 --     content_column   => 'body',
@@ -861,7 +861,7 @@ SELECT * FROM ai.search(
 -- );
 
 -- 4f. Hybrid with custom top_k
-SELECT * FROM ai.search(
+SELECT * FROM ai.search_orig(
     'high availability failover',
     top_k => 5,
     rerank => false
@@ -870,12 +870,12 @@ SELECT * FROM ai.search(
 
 -- ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 -- SECTION 4b: product_sample Examples
--- Uses ai.search() against the 100K Amazon product catalog.
+-- Uses ai.search_orig() against the 100K Amazon product catalog.
 -- Table has: idx_product_fts (BM25 on title/store), DiskANN on embedding.
 -- ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 
 -- 4h. Hybrid on product catalog — BM25 + vector + RRF
-SELECT * FROM ai.search(
+SELECT * FROM ai.search_orig(
     'mid-century modern coffee table',
     source_table     => 'product_sample',
     search_type      => 'hybrid',
@@ -887,7 +887,7 @@ SELECT * FROM ai.search(
 );
 
 -- 4i. Product search with reranking
-SELECT * FROM ai.search(
+SELECT * FROM ai.search_orig(
     'quiet space heater for bedroom energy efficient',
     source_table     => 'product_sample',
     search_type      => 'hybrid',
@@ -899,7 +899,7 @@ SELECT * FROM ai.search(
 );
 
 -- 4j. Vector-only product search
-SELECT * FROM ai.search(
+SELECT * FROM ai.search_orig(
     'bohemian area rug for living room loft warm tones',
     source_table     => 'product_sample',
     search_type      => 'vector',
@@ -910,7 +910,7 @@ SELECT * FROM ai.search(
 );
 
 -- 4k. BM25-only product search
-SELECT * FROM ai.search(
+SELECT * FROM ai.search_orig(
     'VASAGLE bookshelf industrial rustic',
     source_table     => 'product_sample',
     search_type      => 'fulltext',
@@ -926,7 +926,7 @@ SELECT * FROM ai.search(
 -- ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 --
 -- ┌─────────────────────────────────────────────────────────────┐
--- │                  ai.search(query)                           │
+-- │                  ai.search_orig(query)                           │
 -- │                                                             │
 -- │  ┌───────────────────┐  ┌──────────────────┐                │
 -- │  │     Vector        │  │    Full-Text     │                │
