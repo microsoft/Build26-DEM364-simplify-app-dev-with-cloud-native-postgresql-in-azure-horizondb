@@ -10,8 +10,8 @@ const PIPELINE_STEPS = [
   },
   {
     icon: '🧬',
-    label: 'Room Description → Embedding',
-    detail: 'Your room description embedded into a 1536-dim vector',
+    label: 'Room Photo → Description → Embedding',
+    detail: 'Your room photo converted into a description and then embedded into a 1536-dim vector',
     engine: 'azure_openai.create_embeddings() — in HorizonDB',
     latency: '80ms',
   },

@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
 import { categoryColors, categoryIcons } from '../data/mockData';
 
-const ROOM_PHOTO = '/room-empty.jpg';
-const ROOM_FURNISHED_PHOTO = '/room-furnished.jpg';
+const ROOM_PHOTO = '/room-empty.png';
+const ROOM_FURNISHED_PHOTO = '/room-furnished.png';
 
 const LOADING_STEPS = [
   { icon: '📷', label: 'Analyzing room photo…', tool: 'analyze_room_photo' },

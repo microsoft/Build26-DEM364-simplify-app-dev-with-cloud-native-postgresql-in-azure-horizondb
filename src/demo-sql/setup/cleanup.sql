@@ -10,7 +10,7 @@ DROP TABLE IF EXISTS product_rag_pipeline_build_2026_output CASCADE;
 DELETE FROM product_sample
 WHERE title = 'New Chair for Living Room';
 
-DELETE FROM style_tagger_output
- WHERE title = 'New Chair for Living Room';
+-- DELETE FROM style_tagger_output
+--  WHERE title = 'New Chair for Living Room';
 
 SELECT ai.drop('style_tagger');
