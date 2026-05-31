@@ -1,7 +1,8 @@
 SELECT * FROM product_sample LIMIT 5;
+SELECT * FROM model_registry.model_list_all();
 
 -- ---------------------------------------------------------------------------
--- ACT 1 — RAG Pipeline in Seconds
+-- Embedding Pipeline in Seconds
 -- ---------------------------------------------------------------------------
 
 SELECT ai.create_pipeline(
@@ -18,28 +19,21 @@ SELECT ai.create_pipeline(
     ],
     trigger => 'on_change'
 );
--- Auto-creates: public.{pipeline_name}_output (doc_id, chunk_index, chunk_text, embedding, ...)
-
--- Run it once to backfill the existing rows.
 SELECT ai.run('product_rag_pipeline_build_2026');
 
 -- ---------------------------------------------------------------------------
--- ACT 1B — Monitor Pipeline 
+-- Monitor Pipeline 
 -- ---------------------------------------------------------------------------
 
 SELECT * FROM ai.status('product_rag_pipeline_build_2026');
-SELECT * FROM ai.list_pipelines();
 
 -- ---------------------------------------------------------------------------
--- ACT 1C — Look at output table
+-- Look at output table
 -- ---------------------------------------------------------------------------
 
 SELECT count(*) FROM product_rag_pipeline_build_2026_output;
 SELECT * FROM product_rag_pipeline_build_2026_output;
 
--- ---------------------------------------------------------------------------
--- ACT 1D — Vector Search
--- ---------------------------------------------------------------------------
 -- Semantic search against the catalog.
 SELECT doc_id, chunk_text, chunk_index
      FROM product_rag_pipeline_build_2026_output
@@ -49,12 +43,9 @@ SELECT doc_id, chunk_text, chunk_index
      LIMIT 5;
     
 -- ---------------------------------------------------------------------------
--- ACT 2 — Auto-Embedding on New Rows
+-- Auto-Embedding on New Rows
 -- ---------------------------------------------------------------------------
 
--- 2a. The most mundane thing imaginable: just add a new product.
---     Because trigger => 'on_change' + incremental_column => 'updated_at',
---     ONLY this row gets chunked and embedded — not the whole table.
 INSERT INTO product_sample (title, content)
 VALUES (
     'New Chair for Living Room',
@@ -63,8 +54,6 @@ VALUES (
 
 SELECT count(*) FROM product_rag_pipeline_build_2026_output;
 
--- 2b. Watch the new doc show up in the sink table within a few seconds.
---     Re-run this a couple of times during the narration.
 SELECT *
      FROM product_rag_pipeline_build_2026_output
      ORDER BY embedding <=> azure_openai.create_embeddings(
