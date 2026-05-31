@@ -9,7 +9,7 @@ CREATE INDEX IF NOT EXISTS idx_product_sample_diskann ON public.product_rag_pipe
 USING diskann (embedding vector_cosine_ops);
 
 -- =============================================================================
--- Prior Step - Room Analysis: Describes the room photo to identify style, furniture, colors, and gaps
+-- Skipped Step - Describes the room photo in text to identify style, colors
 -- =============================================================================
 
 -- Search for furniture and decor matching the room design query
