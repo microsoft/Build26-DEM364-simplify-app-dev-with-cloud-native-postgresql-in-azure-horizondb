@@ -1,11 +1,11 @@
 -- Clean up pipeline (removes triggers, checkpoints, and run history)
-SELECT ai.drop('product_rag_pipeline_build_2026');
+SELECT ai.drop('embedding_pipeline');
 
-DELETE FROM ai.pipelines WHERE name = 'product_rag_pipeline_build_2026';
-DROP TABLE IF EXISTS product_rag_pipeline_build_2026_output CASCADE;
+DELETE FROM ai.pipelines WHERE name = 'embedding_pipeline';
+DROP TABLE IF EXISTS embedding_pipeline_output CASCADE;
 
 -- Drop the output table
-DROP TABLE IF EXISTS product_rag_pipeline_build_2026_output CASCADE;
+DROP TABLE IF EXISTS embedding_pipeline_output CASCADE;
 
 DELETE FROM product_sample
 WHERE title = 'New Chair for Living Room';
