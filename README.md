@@ -52,6 +52,7 @@ The 6-tool agent pipeline:
     │       ├── setup.sql                           # Extensions and base config
     │       ├── ai-search.sql                       # Search index setup
     │       ├── graph_creation.sql                  # AGE graph schema
+    │       ├── graph_creation_pipeline.sql         # AI pipeline that builds the style graph
     │       ├── cleanup.sql                         # Teardown script
     │       └── data/                               # Sample data + table DDL
     │           ├── product-sample-table.sql        # Product table DDL
@@ -213,17 +214,14 @@ For more info, other clients, and to post questions, visit the [Learn MCP Server
 
 ## Content Owners
 
-<!-- TODO: Add yourself as a content owner
-1. Change the src in the image tag to {your github url}.png
-2. Change INSERT NAME HERE to your name
-3. Change the github url in the final href to your url. -->
+<!-- Content owners -->
 
 <table>
 <tr>
-    <td align="center"><a href="http://github.com/yourGitHubHandle">
-        <img src="https://github.com/yourGitHubHandle.png" width="100px;" alt="INSERT NAME HERE"/><br />
-        <sub><b>INSERT NAME HERE</b></sub></a><br />
-            <a href="https://github.com/yourGitHubHandle" title="talk">📢</a>
+    <td align="center"><a href="http://github.com/maxluk">
+        <img src="https://github.com/maxluk.png" width="100px;" alt="Maxim Lukiyanov"/><br />
+        <sub><b>Maxim Lukiyanov</b></sub></a><br />
+            <a href="https://github.com/maxluk" title="talk">📢</a>
     </td>
 </tr></table>
 
