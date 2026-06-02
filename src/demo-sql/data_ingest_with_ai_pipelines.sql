@@ -12,7 +12,7 @@ SELECT ai.create_pipeline(
         ai.chunk(input => 'content',
                  chunk_size => 1024, 
                  overlap => 128), -- generates chunk_text, chunk_index, etc.
-        ai.embed(model => 'default-embedding', 
+        ai.embed(model => 'text-embedding-3-small', 
                  input_column => 'chunk_text',
                  dimensions => 1536,
                  batch_size => 20)
@@ -38,7 +38,7 @@ SELECT * FROM embedding_pipeline_output;
 SELECT doc_id, chunk_text, chunk_index
      FROM embedding_pipeline_output
      ORDER BY embedding <=> azure_openai.create_embeddings(
-                                'default-embedding',
+                                'text-embedding-3-small',
                                 'Best chair that is comfortable for a living room')::vector
      LIMIT 5;
     
@@ -57,6 +57,6 @@ SELECT count(*) FROM embedding_pipeline_output;
 SELECT *
      FROM embedding_pipeline_output
      ORDER BY embedding <=> azure_openai.create_embeddings(
-                                'default-embedding',
+                                'text-embedding-3-small',
                                 'Best chair that is comfortable for a living room')::vector
      LIMIT 5;

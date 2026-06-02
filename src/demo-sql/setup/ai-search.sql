@@ -102,7 +102,7 @@ INSERT INTO knowledge_base (title, content, category) VALUES
 -- ---------------------------------------------------------------------------
 UPDATE knowledge_base
 SET embedding = azure_openai.create_embeddings(
-    'default-embedding', content
+    'text-embedding-3-small', content
 )::vector
 WHERE embedding IS NULL;
 
@@ -174,7 +174,7 @@ CREATE OR REPLACE FUNCTION ai.search_orig(
     embedding_column text    DEFAULT NULL,  -- auto-detected from vector index
     id_column        text    DEFAULT NULL,  -- auto-detected from primary key
     title_column     text    DEFAULT NULL,  -- defaults to content_column
-    embedding_model  text    DEFAULT 'default-embedding',
+    embedding_model  text    DEFAULT 'text-embedding-3-small',
     rerank_model     text    DEFAULT 'default-chat', -- defaults to GPT model as a reranker, more accurate, but slower
     rerank           boolean DEFAULT false,
     filter           text    DEFAULT NULL   -- optional WHERE clause fragment for pre-filtering
@@ -714,7 +714,7 @@ AS $$
         SELECT s.ids
         FROM (SELECT 1 WHERE search_type IN ('vector','hybrid')) AS g,
              LATERAL (SELECT ai.search_vector(
-                 azure_openai.create_embeddings('default-embedding', query)::vector,
+                 azure_openai.create_embeddings('text-embedding-3-small', query)::vector,
                  COALESCE(fetch_k, top_k * 3),
                  source_table
              ) AS ids) s
@@ -770,7 +770,7 @@ AS $$
         SELECT s.ids
         FROM (SELECT 1 WHERE search_type IN ('vector','hybrid')) AS g,
              LATERAL (SELECT ai.search_vector(
-                 azure_openai.create_embeddings('default-embedding', query)::vector,
+                 azure_openai.create_embeddings('text-embedding-3-small', query)::vector,
                  COALESCE(fetch_k, top_k * 3),
                  source_table
              ) AS ids) s
