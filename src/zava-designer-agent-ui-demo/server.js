@@ -227,7 +227,7 @@ async function hybridSearchProducts(searchQuery, priorities, brands, demoMode = 
     const prefix = demoMode ? '' : (CATEGORY_QUERY_PREFIX[priority] || '');
     const categoryQuery = demoMode ? searchQuery : `${prefix} ${searchQuery}`;
 
-    // Build the filter string safely — ai.search takes it as a text param
+    // Build the filter string safely — applied as a WHERE clause on product_sample
     // Include rating >= 4.0 and price > $25 to filter out novelty/gift items
     let filterStr;
     if (Array.isArray(dbCategory)) {
@@ -245,14 +245,19 @@ async function hybridSearchProducts(searchQuery, priorities, brands, demoMode = 
       FROM ai.search(
         $1,
         source_table => 'product_metadata_demo',
-        filter => $2
+        content_column => 'chunk_text',
+        search_type => 'hybrid',
+        top_k => 20
       ) s
-      JOIN product_metadata_demo p ON p.id = s.id
+      JOIN product_metadata_demo o ON o.id = s.id
+      JOIN product_sample p ON p.id = o.doc_id
+      WHERE ${filterStr}
+      ORDER BY s.score DESC
       LIMIT 5
     `;
 
     try {
-      const { rows, duration } = await query(sql, [categoryQuery, filterStr]);
+      const { rows, duration } = await query(sql, [categoryQuery]);
       return { priority, rows, duration };
     } catch (err) {
       console.error(`hybrid_search for ${dbCategory} failed:`, err.message);
@@ -274,7 +279,7 @@ async function hybridSearchProducts(searchQuery, priorities, brands, demoMode = 
   return {
     tool: 'hybrid_search_products',
     duration: wallClockDuration,
-    sql: `SELECT p.title, p.price, s.score\nFROM ai.search($1, source_table => 'product_metadata_demo',\n  filter => $2) s\nJOIN product_metadata_demo p ON p.id = s.id\nLIMIT 5;`,
+    sql: `SELECT p.title, p.price, s.score\nFROM ai.search($1, source_table => 'product_metadata_demo',\n  content_column => 'chunk_text', search_type => 'hybrid', top_k => 20) s\nJOIN product_metadata_demo o ON o.id = s.id\nJOIN product_sample p ON p.id = o.doc_id\nWHERE <category + rating + price filter>\nORDER BY s.score DESC\nLIMIT 5;`,
     input: { query: searchQuery, categories: categoriesToSearch, rerank: true },
     output: {
       total_results: allResults.length,
@@ -299,7 +304,7 @@ async function findRelatedProducts(productIds, limit = 3) {
       SELECT id, title, parent_asin,
              details->>'bought_together' AS bought_together,
              categories
-      FROM product_metadata_demo
+      FROM product_sample
       WHERE id = $1
     `;
     const { rows: sourceRows } = await query(sqlSource, [pid]);
@@ -318,7 +323,7 @@ async function findRelatedProducts(productIds, limit = 3) {
           const sqlRelated = `
             SELECT id, title, price, average_rating, rating_number,
                    store, categories, images
-            FROM product_metadata_demo
+            FROM product_sample
             WHERE parent_asin = ANY($1)
             LIMIT $2
           `;
@@ -339,7 +344,7 @@ async function findRelatedProducts(productIds, limit = 3) {
         const sqlCat = `
           SELECT id, title, price, average_rating, rating_number,
                  store, categories, images
-          FROM product_metadata_demo
+          FROM product_sample
           WHERE categories @> to_jsonb($1::text)
             AND id != $2
           ORDER BY average_rating DESC NULLS LAST
@@ -469,7 +474,7 @@ async function filterProducts(products, budget, numCategories) {
   const sql = `
     SELECT id, title, price, average_rating, rating_number,
            store, categories, images
-    FROM product_metadata_demo
+    FROM product_sample
     WHERE id = ANY($1)
       AND price_num IS NOT NULL
       AND price_num <= $2
@@ -481,7 +486,7 @@ async function filterProducts(products, budget, numCategories) {
   return {
     tool: 'filter_products',
     duration,
-    sql: `SELECT id, title, price, average_rating\nFROM product_metadata_demo\nWHERE id = ANY($1) AND price_num <= $2\n  AND average_rating >= 4.0\nORDER BY average_rating DESC;`,
+    sql: `SELECT id, title, price, average_rating\nFROM product_sample\nWHERE id = ANY($1) AND price_num <= $2\n  AND average_rating >= 4.0\nORDER BY average_rating DESC;`,
     input: { budget, max_per_item: Math.round(maxPerItem), min_rating: 4.0, candidates: ids.length },
     output: { matched: rows.length, filtered_out: ids.length - rows.length },
     _products: rows,
@@ -502,7 +507,7 @@ async function ensureBoostedProducts(candidates) {
   const sql = `
     SELECT id, title, price, average_rating, rating_number,
            store, categories, images
-    FROM product_metadata_demo
+    FROM product_sample
     WHERE id = ANY($1)
   `;
   try {
