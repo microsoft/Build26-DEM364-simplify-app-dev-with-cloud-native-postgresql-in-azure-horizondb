@@ -247,8 +247,7 @@ async function hybridSearchProducts(searchQuery, priorities, brands, demoMode = 
         source_table => 'product_metadata_demo',
         content_column => 'chunk_text',
         search_type => 'hybrid',
-        top_k => 20,
-        embedding_model => 'text-embedding-3-small'
+        top_k => 20
       ) s
       JOIN product_metadata_demo o ON o.id = s.id
       JOIN product_sample p ON p.id = o.doc_id
