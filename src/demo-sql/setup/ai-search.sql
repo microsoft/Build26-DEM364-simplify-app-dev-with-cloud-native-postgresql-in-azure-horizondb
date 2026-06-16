@@ -35,32 +35,7 @@ CREATE EXTENSION IF NOT EXISTS pg_diskann;
 
 SET search_path = public, pgfts, "$user";
 
--- ---------------------------------------------------------------------------
--- REQUIRED: Configure your Azure OpenAI (or Foundry) endpoint + key.
---
--- Replace the placeholders below with your own values:
---   * model endpoint URL        — e.g. https://<your-resource>.openai.azure.com/
---   * YOUR_API_KEY — the API key for that resource
---
--- Find both in the Azure Portal under your Azure OpenAI / Foundry resource →
--- "Keys and Endpoint". If key-based auth is disabled by policy on your tenant,
--- use the Model Management / model registry approach instead:
---   https://learn.microsoft.com/azure/horizondb/ai/ai-functions#option-2-manual-setup-with-model-registry
---
--- Leaving these blank causes: "Create embedding access denied due to invalid
--- subscription key or wrong API endpoint."
--- ---------------------------------------------------------------------------
 
--- NOTE ON SCHEMA CHOICE (HorizonDB):
---   On Azure HorizonDB the `ai` schema is owned by the platform superuser
---   (azuresu) and the admin login (adminuser) has USAGE only — NOT CREATE.
---   Attempting `CREATE FUNCTION ai.search...` fails with
---   "permission denied for schema ai", and you cannot GRANT yourself rights
---   on a schema you do not own. These helper functions are therefore created
---   in the `public` schema, which the admin role can write to. Functions in
---   `public` are executable by PUBLIC by default, so no extra GRANT is needed.
---   If you have a role that owns/can write to `ai`, change the `public.`
---   prefixes below back to `ai.`.
 
 -- ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 -- SECTION 3: ai.search_orig()  — The Main Entry Point
@@ -486,7 +461,7 @@ $$;
 CREATE OR REPLACE FUNCTION public.search_vector(
     qv           vector,
     k            int,
-    source_table text DEFAULT 'knowledge_base'
+    source_table text DEFAULT 'embedding_pipeline_output'
 )
 RETURNS int[]
 LANGUAGE plpgsql
@@ -565,8 +540,8 @@ CREATE OR REPLACE FUNCTION public.rerank(
     query          text,
     cand_ids       int[],                                                       -- candidate IDs in best-first order
     model          text DEFAULT 'default-chat',
-    source_table   text DEFAULT 'knowledge_base',
-    content_column text DEFAULT 'content'
+    source_table   text DEFAULT 'embedding_pipeline_output',
+    content_column text DEFAULT 'chunk_text'
 )
 RETURNS TABLE(id int, score real)
 LANGUAGE plpgsql
