@@ -145,7 +145,7 @@ async function getSemanticContext(roomDescription, theme) {
     FROM pg_attribute a
     JOIN pg_class c ON a.attrelid = c.oid
     JOIN pg_namespace n ON n.oid = c.relnamespace
-    WHERE c.relname = 'product_metadata_demo'
+    WHERE c.relname = 'product_sample'
       AND n.nspname = 'public'
       AND a.attnum > 0
       AND NOT a.attisdropped
@@ -180,10 +180,10 @@ async function getSemanticContext(roomDescription, theme) {
   return {
     tool: 'get_semantic_context',
     duration: duration + dictDuration,
-    sql: `SELECT a.attname, col_description(a.attrelid, a.attnum)\nFROM pg_attribute a JOIN pg_class c ON a.attrelid = c.oid\nWHERE c.relname = 'product_metadata_demo';`,
+    sql: `SELECT a.attname, col_description(a.attrelid, a.attnum)\nFROM pg_attribute a JOIN pg_class c ON a.attrelid = c.oid\nWHERE c.relname = 'product_sample';`,
     input: { room_description: roomDescription, theme },
     output: {
-      table: 'product_metadata_demo',
+      table: 'product_sample',
       columns_inspected: columns.length,
       key_columns: columns.filter(c => c.comment).map(c => `${c.name}: ${c.comment}`).slice(0, 6),
       expanded_terms: expandedTerms.length > 0
@@ -244,13 +244,12 @@ async function hybridSearchProducts(searchQuery, priorities, brands, demoMode = 
              p.store, p.categories, p.images, s.score
       FROM ai.search(
         $1,
-        source_table => 'product_metadata_demo',
-        content_column => 'chunk_text',
+        source_table => 'product_sample',
+        content_column => 'content',
         search_type => 'hybrid',
         top_k => 20
       ) s
-      JOIN product_metadata_demo o ON o.id = s.id
-      JOIN product_sample p ON p.id = o.doc_id
+      JOIN product_sample p ON p.id = s.id
       WHERE ${filterStr}
       ORDER BY s.score DESC
       LIMIT 5
@@ -279,7 +278,7 @@ async function hybridSearchProducts(searchQuery, priorities, brands, demoMode = 
   return {
     tool: 'hybrid_search_products',
     duration: wallClockDuration,
-    sql: `SELECT p.title, p.price, s.score\nFROM ai.search($1, source_table => 'product_metadata_demo',\n  content_column => 'chunk_text', search_type => 'hybrid', top_k => 20) s\nJOIN product_metadata_demo o ON o.id = s.id\nJOIN product_sample p ON p.id = o.doc_id\nWHERE <category + rating + price filter>\nORDER BY s.score DESC\nLIMIT 5;`,
+    sql: `SELECT p.title, p.price, s.score\nFROM ai.search($1, source_table => 'product_sample',\n  content_column => 'content', search_type => 'hybrid', top_k => 20) s\nJOIN product_sample p ON p.id = s.id\nWHERE <category + rating + price filter>\nORDER BY s.score DESC\nLIMIT 5;`,
     input: { query: searchQuery, categories: categoriesToSearch, rerank: true },
     output: {
       total_results: allResults.length,
