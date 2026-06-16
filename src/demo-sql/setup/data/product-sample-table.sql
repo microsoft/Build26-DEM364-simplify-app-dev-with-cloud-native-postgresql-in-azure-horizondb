@@ -5,7 +5,7 @@
 -- "create this table product-sample-table.sql with this data sample_data_products.csv"
 
 -- Drop dependent objects first
-DROP TABLE IF EXISTS product_rag_pipeline_output;
+DROP TABLE IF EXISTS embedding_pipeline_output;
 DROP TABLE IF EXISTS product_sample CASCADE;
 DROP SEQUENCE IF EXISTS product_sample_id_seq;
 

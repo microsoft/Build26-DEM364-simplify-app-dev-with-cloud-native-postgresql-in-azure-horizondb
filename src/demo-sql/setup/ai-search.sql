@@ -7,12 +7,12 @@
 -- and hybrid search (vector + fulltext fused via Reciprocal Rank Fusion).
 --
 -- Usage:
---   SELECT * FROM ai.search_orig('how do I scale PostgreSQL?');
---   SELECT * FROM ai.search_orig('replication lag', search_type => 'fulltext');
---   SELECT * FROM ai.search_orig('backup strategy', search_type => 'vector');
---   SELECT * FROM ai.search_orig('disaster recovery', top_k => 5);
---   SELECT * FROM ai.search_orig('vector index', rerank => false);
---   SELECT * FROM ai.search_orig('RAG pipeline',
+--   SELECT * FROM public.search_orig('how do I scale PostgreSQL?');
+--   SELECT * FROM public.search_orig('replication lag', search_type => 'fulltext');
+--   SELECT * FROM public.search_orig('backup strategy', search_type => 'vector');
+--   SELECT * FROM public.search_orig('disaster recovery', top_k => 5);
+--   SELECT * FROM public.search_orig('vector index', rerank => false);
+--   SELECT * FROM public.search_orig('RAG pipeline',
 --       embedding_model => 'text-embedding-3-large',
 --       rerank_model    => 'gpt-4.1');
 --
@@ -35,93 +35,32 @@ CREATE EXTENSION IF NOT EXISTS pg_diskann;
 
 SET search_path = public, pgfts, "$user";
 
-SELECT azure_ai.set_setting('azure_openai.endpoint', 'https://XXXXX.openai.azure.com/');
-SELECT azure_ai.set_setting('azure_openai.subscription_key', '');
-
-
-CREATE SCHEMA IF NOT EXISTS ai;
-
--- ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
--- SECTION 1: Sample Knowledge Base for Testing
--- A docs table with content and embeddings
--- ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-
-DROP TABLE IF EXISTS knowledge_base CASCADE;
-
-CREATE TABLE knowledge_base (
-    id        SERIAL PRIMARY KEY,
-    title     TEXT NOT NULL,
-    content   TEXT NOT NULL,
-    category  TEXT,
-    embedding vector(1536)   -- azure_ai / OpenAI embedding dimension
-);
-
 -- ---------------------------------------------------------------------------
--- Sample documents (embeddings would be generated via azure_openai.create_embeddings)
+-- REQUIRED: Configure your Azure OpenAI (or Foundry) endpoint + key.
+--
+-- Replace the placeholders below with your own values:
+--   * model endpoint URL        — e.g. https://<your-resource>.openai.azure.com/
+--   * YOUR_API_KEY — the API key for that resource
+--
+-- Find both in the Azure Portal under your Azure OpenAI / Foundry resource →
+-- "Keys and Endpoint". If key-based auth is disabled by policy on your tenant,
+-- use the Model Management / model registry approach instead:
+--   https://learn.microsoft.com/azure/horizondb/ai/ai-functions#option-2-manual-setup-with-model-registry
+--
+-- Leaving these blank causes: "Create embedding access denied due to invalid
+-- subscription key or wrong API endpoint."
 -- ---------------------------------------------------------------------------
 
-INSERT INTO knowledge_base (title, content, category) VALUES
-    ('PostgreSQL Replication Overview',
-     'PostgreSQL supports streaming replication for high availability. Primary servers send WAL records to standby servers in real time. Synchronous replication guarantees zero data loss at the cost of higher latency.',
-     'high-availability'),
-
-    ('Replication Slot Management',
-     'Replication slots ensure standby servers do not miss WAL segments. However, inactive slots can cause WAL accumulation and disk pressure. Monitor pg_replication_slots and drop unused slots promptly.',
-     'high-availability'),
-
-    ('Backup and Point-in-Time Recovery',
-     'Use pg_basebackup for physical backups and continuous WAL archiving for point-in-time recovery (PITR). Combine with pg_dump for logical, schema-level backups. Test restores regularly.',
-     'disaster-recovery'),
-
-    ('Connection Pooling with PgBouncer',
-     'PgBouncer reduces connection overhead by pooling database connections. Transaction-level pooling offers the best balance of concurrency and resource usage for most workloads.',
-     'performance'),
-
-    ('Scaling Read Workloads with Read Replicas',
-     'Read replicas distribute SELECT queries across multiple standbys. Use connection routing at the application layer or with a proxy like PgBouncer to balance load across replicas.',
-     'scalability'),
-
-    ('Disaster Recovery Planning',
-     'A complete DR plan combines streaming replication for failover, WAL archiving for PITR, and regular pg_dump exports for cross-region portability. Test failover runbooks quarterly.',
-     'disaster-recovery'),
-
-    ('Vector Search with pgvector',
-     'The pgvector extension adds vector data types and similarity operators to PostgreSQL. Use cosine distance (<=>), inner product (<#>), and L2 distance (<->) for nearest-neighbor search. Create HNSW or IVFFlat indexes for fast approximate retrieval.',
-     'ai-search'),
-
-    ('Full-Text Search with pg_fts',
-     'pg_fts brings BM25 ranking to PostgreSQL via the Tantivy engine. Create a BM25 index with CREATE INDEX ... USING fts and query with the @@? operator. Supports fuzzy search, proximity search, and multi-language tokenizers.',
-     'ai-search'),
-
-    ('Hybrid Search: Combining Vector and Keyword',
-     'Neither vector search nor keyword search is universally best. Vector search captures semantic similarity; keyword search captures exact term matches. Reciprocal Rank Fusion (RRF) merges ranked lists from both approaches into a single, superior ranking.',
-     'ai-search');
-
--- ---------------------------------------------------------------------------
--- Generate embeddings for every document (requires azure_ai endpoint config)
--- ---------------------------------------------------------------------------
-UPDATE knowledge_base
-SET embedding = azure_openai.create_embeddings(
-    'text-embedding-3-small', content
-)::vector
-WHERE embedding IS NULL;
-
-
--- ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
--- SECTION 2: Indexes
--- ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-
--- BM25 full-text index (pg_fts)
-CREATE INDEX kb_content_bm25_idx ON knowledge_base USING fts (content text_fts_ops);
-
--- DiskANN vector index (pgvector) — cosine distance
-CREATE INDEX kb_embedding_diskann_idx ON knowledge_base
-    USING diskann (embedding vector_cosine_ops);
-
--- Reciprocal Rank Fusion (RRF) is applied inline inside ai.search_orig.
--- RRF formula:  score(d) = Σ  1 / (k + rank_i(d))
--- where k = 60 (standard constant), and i iterates over each ranker.
-
+-- NOTE ON SCHEMA CHOICE (HorizonDB):
+--   On Azure HorizonDB the `ai` schema is owned by the platform superuser
+--   (azuresu) and the admin login (adminuser) has USAGE only — NOT CREATE.
+--   Attempting `CREATE FUNCTION ai.search...` fails with
+--   "permission denied for schema ai", and you cannot GRANT yourself rights
+--   on a schema you do not own. These helper functions are therefore created
+--   in the `public` schema, which the admin role can write to. Functions in
+--   `public` are executable by PUBLIC by default, so no extra GRANT is needed.
+--   If you have a role that owns/can write to `ai`, change the `public.`
+--   prefixes below back to `ai.`.
 
 -- ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 -- SECTION 3: ai.search_orig()  — The Main Entry Point
@@ -160,11 +99,11 @@ CREATE INDEX kb_embedding_diskann_idx ON knowledge_base
 --   4. Return top_k results
 -- ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 
-DROP FUNCTION IF EXISTS ai.search_orig(text, text, int, int, int, text, text, boolean);
-DROP FUNCTION IF EXISTS ai.search_orig(text, text, text, int, int, int, text, text, text, text, text, text, boolean);
-DROP FUNCTION IF EXISTS ai.search_orig(text, text, text, int, int, text, text, text, text, text, text, boolean);
-DROP FUNCTION IF EXISTS ai.search_orig(text, text, text, int, int, text, text, text, text, text, text, boolean, text);
-CREATE OR REPLACE FUNCTION ai.search_orig(
+DROP FUNCTION IF EXISTS public.search_orig(text, text, int, int, int, text, text, boolean);
+DROP FUNCTION IF EXISTS public.search_orig(text, text, text, int, int, int, text, text, text, text, text, text, boolean);
+DROP FUNCTION IF EXISTS public.search_orig(text, text, text, int, int, text, text, text, text, text, text, boolean);
+DROP FUNCTION IF EXISTS public.search_orig(text, text, text, int, int, text, text, text, text, text, text, boolean, text);
+CREATE OR REPLACE FUNCTION public.search_orig(
     query            text,
     source_table     text    DEFAULT 'knowledge_base',
     search_type      text    DEFAULT 'hybrid',
@@ -229,7 +168,7 @@ BEGIN
     --   CREATE INDEX ON my_docs USING fts (body text_fts_ops);     -- → content
     --   CREATE INDEX ON my_docs USING diskann (vec vector_cosine_ops); -- → embedding
     --
-    --   SELECT * FROM ai.search_orig('query', source_table => 'my_docs');
+    --   SELECT * FROM public.search_orig('query', source_table => 'my_docs');
     -- =================================================================
 
     -- Primary key → id_column
@@ -444,7 +383,7 @@ BEGIN
         JOIN (
             SELECT *
             FROM azure_ai.rank(
-                query              => search.query,
+                query              => search_orig.query,
                 document_contents  => (SELECT array_agg(sc._content ORDER BY sc._score DESC)
                                        FROM _search_candidates sc),
                 document_ids       => (SELECT array_agg(sc._id::text ORDER BY sc._score DESC)
@@ -469,12 +408,12 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION ai.search_orig(text, text, text, int, int, text, text, text, text, text, text, boolean, text) IS
+COMMENT ON FUNCTION public.search_orig(text, text, text, int, int, text, text, text, text, text, text, boolean, text) IS
 'Unified search over any table. Auto-detects columns from indexes: '
 'primary key → id, BM25 (fts) index → content, vector index → embedding. '
 'Supports vector, fulltext (BM25), and hybrid (RRF) search with optional pre-filtering. '
 'Optionally reranks with azure_ai.rank(). Just point it at your table: '
-'SELECT * FROM ai.search_orig(''query'', source_table => ''my_docs'');';
+'SELECT * FROM public.search_orig(''query'', source_table => ''my_docs'');';
 
 
 -- ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
@@ -511,11 +450,11 @@ COMMENT ON FUNCTION ai.search_orig(text, text, text, int, int, text, text, text,
 -- hidden behind a parameter and pgfts errors out, so this component is
 -- plpgsql + EXECUTE (the only non-inlineable arm).
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION ai.search_fulltext(
+CREATE OR REPLACE FUNCTION public.search_fulltext(
     query          text,
     k              int,
-    source_table   text DEFAULT 'product_rag_pipeline_build_2026_output',
-    content_column text DEFAULT 'chunk_text'
+    source_table   text DEFAULT 'knowledge_base',
+    content_column text DEFAULT 'content'
 )
 RETURNS int[]
 LANGUAGE plpgsql
@@ -544,10 +483,10 @@ $$;
 -- arm as an opaque Function Scan instead of leaking the diskann scan
 -- into the top-level plan.
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION ai.search_vector(
+CREATE OR REPLACE FUNCTION public.search_vector(
     qv           vector,
     k            int,
-    source_table text DEFAULT 'product_rag_pipeline_build_2026_output'
+    source_table text DEFAULT 'knowledge_base'
 )
 RETURNS int[]
 LANGUAGE plpgsql
@@ -577,7 +516,7 @@ $$;
 -- with a single SELECT so the planner can inline this into the calling
 -- query (IMMUTABLE + no PL/pgSQL block).
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION ai.rrf_fuse(
+CREATE OR REPLACE FUNCTION public.rrf_fuse(
     fts_ids int[],
     vec_ids int[],
     rrf_k   int DEFAULT 60,
@@ -622,12 +561,12 @@ $$;
 -- join to the source table + array_agg + the rank() call stay hidden
 -- behind a single opaque Function Scan in EXPLAIN ANALYZE.
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION ai.rerank(
+CREATE OR REPLACE FUNCTION public.rerank(
     query          text,
     cand_ids       int[],                                                       -- candidate IDs in best-first order
     model          text DEFAULT 'default-chat',
-    source_table   text DEFAULT 'product_rag_pipeline_build_2026_output',
-    content_column text DEFAULT 'chunk_text'
+    source_table   text DEFAULT 'knowledge_base',
+    content_column text DEFAULT 'content'
 )
 RETURNS TABLE(id int, score real)
 LANGUAGE plpgsql
@@ -679,16 +618,16 @@ $$;
 -- search_vector, rrf_fuse, rerank) is plpgsql and therefore opaque in
 -- EXPLAIN ANALYZE.
 -- ---------------------------------------------------------------------------
-DROP FUNCTION IF EXISTS ai.search(text, int, int, int);
-DROP FUNCTION IF EXISTS ai.search(text, int, int, int, boolean, text);
-DROP FUNCTION IF EXISTS ai.search(text, boolean, int, int, int, text);
-DROP FUNCTION IF EXISTS ai.search(text, int, int, int, text, text);
-DROP FUNCTION IF EXISTS ai.search(text, boolean, int, int, int, text, text, text);
-DROP FUNCTION IF EXISTS ai.search(text, text, text, int, int, int);
-DROP FUNCTION IF EXISTS ai.search(text, text, text, boolean, int, int, int, text);
+DROP FUNCTION IF EXISTS public.search(text, int, int, int);
+DROP FUNCTION IF EXISTS public.search(text, int, int, int, boolean, text);
+DROP FUNCTION IF EXISTS public.search(text, boolean, int, int, int, text);
+DROP FUNCTION IF EXISTS public.search(text, int, int, int, text, text);
+DROP FUNCTION IF EXISTS public.search(text, boolean, int, int, int, text, text, text);
+DROP FUNCTION IF EXISTS public.search(text, text, text, int, int, int);
+DROP FUNCTION IF EXISTS public.search(text, text, text, boolean, int, int, int, text);
 
 -- Overload 1: no reranking.
-CREATE OR REPLACE FUNCTION ai.search(
+CREATE OR REPLACE FUNCTION public.search(
     query          text,
     source_table   text,
     content_column text,
@@ -705,7 +644,7 @@ AS $$
     "full-text search" AS MATERIALIZED (
         SELECT s.ids
         FROM (SELECT 1 WHERE search_type IN ('fulltext','hybrid')) AS g,
-             LATERAL (SELECT ai.search_fulltext(query, COALESCE(fetch_k, top_k * 3),
+             LATERAL (SELECT public.search_fulltext(query, COALESCE(fetch_k, top_k * 3),
                                                 source_table, content_column) AS ids) s
         UNION ALL
         SELECT '{}'::int[] AS ids WHERE search_type NOT IN ('fulltext','hybrid')
@@ -713,7 +652,7 @@ AS $$
     "vector search" AS MATERIALIZED (
         SELECT s.ids
         FROM (SELECT 1 WHERE search_type IN ('vector','hybrid')) AS g,
-             LATERAL (SELECT ai.search_vector(
+             LATERAL (SELECT public.search_vector(
                  azure_openai.create_embeddings('text-embedding-3-small', query)::vector,
                  COALESCE(fetch_k, top_k * 3),
                  source_table
@@ -723,7 +662,7 @@ AS $$
     ),
     "RRF - Reciprocal Rank Fusion: score = Σ  1 / (60 + rank_i(d))" AS MATERIALIZED (
         SELECT r.id, r.score
-        FROM ai.rrf_fuse(
+        FROM public.rrf_fuse(
             (SELECT ids FROM "full-text search"),
             (SELECT ids FROM "vector search"),
             rrf_k,
@@ -733,16 +672,16 @@ AS $$
     SELECT id, score FROM "RRF - Reciprocal Rank Fusion: score = Σ  1 / (60 + rank_i(d))";
 $$;
 
-COMMENT ON FUNCTION ai.search(text, text, text, text, int, int, int) IS
+COMMENT ON FUNCTION public.search(text, text, text, text, int, int, int) IS
 'Inlineable two-layer hybrid search: ai.search_fulltext + ai.search_vector '
 'fused by ai.rrf_fuse via RRF. No reranking. `search_type` selects which '
 'retrieval arms run: ''hybrid'' (default), ''vector'', or ''fulltext''. '
 'Embedding column is hard-coded to `embedding`.';
 
--- Overload 2: with semantic reranking via ai.rerank().
+-- Overload 2: with semantic reranking via public.rerank().
 -- `rerank` has NO default — that disambiguates this overload from the
 -- no-rerank one above.
-CREATE OR REPLACE FUNCTION ai.search(
+CREATE OR REPLACE FUNCTION public.search(
     query          text,
     source_table   text,
     content_column text,
@@ -761,7 +700,7 @@ AS $$
     "full-text search" AS MATERIALIZED (
         SELECT s.ids
         FROM (SELECT 1 WHERE search_type IN ('fulltext','hybrid')) AS g,
-             LATERAL (SELECT ai.search_fulltext(query, COALESCE(fetch_k, top_k * 3),
+             LATERAL (SELECT public.search_fulltext(query, COALESCE(fetch_k, top_k * 3),
                                                 source_table, content_column) AS ids) s
         UNION ALL
         SELECT '{}'::int[] AS ids WHERE search_type NOT IN ('fulltext','hybrid')
@@ -769,7 +708,7 @@ AS $$
     "vector search" AS MATERIALIZED (
         SELECT s.ids
         FROM (SELECT 1 WHERE search_type IN ('vector','hybrid')) AS g,
-             LATERAL (SELECT ai.search_vector(
+             LATERAL (SELECT public.search_vector(
                  azure_openai.create_embeddings('text-embedding-3-small', query)::vector,
                  COALESCE(fetch_k, top_k * 3),
                  source_table
@@ -779,7 +718,7 @@ AS $$
     ),
     "RRF - Reciprocal Rank Fusion: score = Σ  1 / (60 + rank_i(d))" AS MATERIALIZED (
         SELECT r.id, r.score
-        FROM ai.rrf_fuse(
+        FROM public.rrf_fuse(
             (SELECT ids FROM "full-text search"),
             (SELECT ids FROM "vector search"),
             rrf_k,
@@ -791,7 +730,7 @@ AS $$
     "semantic rerank" AS MATERIALIZED (
         SELECT r.id, r.score
         FROM (SELECT 1 WHERE rerank) AS g,
-        LATERAL ai.rerank(
+        LATERAL public.rerank(
             query,
             ARRAY(
                 SELECT id
@@ -813,112 +752,12 @@ AS $$
     LIMIT top_k;
 $$;
 
-COMMENT ON FUNCTION ai.search(text, text, text, text, boolean, int, int, int, text) IS
+COMMENT ON FUNCTION public.search(text, text, text, text, boolean, int, int, int, text) IS
 'Inlineable hybrid search with optional semantic reranking via ai.rerank(). '
 'query, source_table, content_column, search_type, and rerank are all '
 'required (no defaults). `search_type` is ''hybrid'' | ''vector'' | '
 '''fulltext''. Embedding column is hard-coded to `embedding`.';
 
-
--- ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
--- SECTION 4: Example Queries
--- ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-
--- 4a. Default: searches 'knowledge_base' — columns auto-detected from indexes
-SELECT * FROM ai.search_orig(
-    'how do I set up disaster recovery for PostgreSQL?',
-    rerank => false
-);
-
--- 4b. Vector-only search (auto-detects embedding column from vector index)
-SELECT * FROM ai.search_orig(
-    'scaling read-heavy workloads',
-    search_type => 'vector',
-    rerank => false
-);
-
--- 4c. Full-text only (auto-detects content column from BM25 fts index)
-SELECT * FROM ai.search_orig(
-    'replication slots WAL',
-    search_type => 'fulltext',
-    rerank => false
-);
-
--- 4d. Point at a different table — columns auto-detected from its indexes
---     (Requires: my_articles table with fts + vector indexes)
--- SELECT * FROM ai.search_orig(
---     'machine learning pipelines',
---     source_table => 'my_articles'
--- );
-
--- 4e. Override specific columns (when auto-detection picks wrong one)
--- SELECT * FROM ai.search_orig(
---     'machine learning pipelines',
---     source_table     => 'articles',
---     content_column   => 'body',
---     embedding_column => 'body_vec',
---     title_column     => 'headline'
--- );
-
--- 4f. Hybrid with custom top_k
-SELECT * FROM ai.search_orig(
-    'high availability failover',
-    top_k => 5,
-    rerank => false
-);
-
-
--- ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
--- SECTION 4b: product_sample Examples
--- Uses ai.search_orig() against the 100K Amazon product catalog.
--- Table has: idx_product_fts (BM25 on title/store), DiskANN on embedding.
--- ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-
--- 4h. Hybrid on product catalog — BM25 + vector + RRF
-SELECT * FROM ai.search_orig(
-    'mid-century modern coffee table',
-    source_table     => 'product_sample',
-    search_type      => 'hybrid',
-    content_column   => 'title',
-    embedding_column => 'embedding',
-    title_column     => 'title',
-    top_k            => 10,
-    rerank           => false
-);
-
--- 4i. Product search with reranking
-SELECT * FROM ai.search_orig(
-    'quiet space heater for bedroom energy efficient',
-    source_table     => 'product_sample',
-    search_type      => 'hybrid',
-    content_column   => 'title',
-    embedding_column => 'embedding',
-    title_column     => 'title',
-    top_k            => 7,
-    rerank           => true
-);
-
--- 4j. Vector-only product search
-SELECT * FROM ai.search_orig(
-    'bohemian area rug for living room loft warm tones',
-    source_table     => 'product_sample',
-    search_type      => 'vector',
-    embedding_column => 'embedding',
-    title_column     => 'title',
-    top_k            => 10,
-    rerank           => false
-);
-
--- 4k. BM25-only product search
-SELECT * FROM ai.search_orig(
-    'VASAGLE bookshelf industrial rustic',
-    source_table     => 'product_sample',
-    search_type      => 'fulltext',
-    content_column   => 'title',
-    title_column     => 'title',
-    top_k            => 10,
-    rerank           => false
-);
 
 
 -- ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░

@@ -74,7 +74,7 @@ User clicks "✨ Design My Room"
 - **Alternative:** `findRelatedProductsGraph()` uses Apache AGE Cypher traversal (toggled by `useGraph` flag)
 
 ### Tool 5: `filterProducts(products, budget, numCategories)`
-- **Calls:** SQL `WHERE` on `product_metadata_demo`
+- **Calls:** SQL `WHERE` on `product_sample`
 - **Filter:** `price_num <= budget/numCategories AND average_rating >= 4.0`
 
 ### Tool 6: `curateRoomPicks(products, roomDescription, budget)`
@@ -240,7 +240,7 @@ PGPASSWORD=...
 ```
 Host:     apr1horizondbai.ed2f11dc7a46.centralus.horizondb.azure.com
 Database: build_2026
-Table:    product_metadata_demo (~100K rows, ~1.8 GB)
+Table:    product_sample (~100K rows, ~1.8 GB)
 Columns:  id, title, description, price, average_rating, rating_number,
           features, images (jsonb), store, categories (jsonb),
           details (jsonb), parent_asin, content, embedding
@@ -249,12 +249,12 @@ Columns:  id, title, description, price, average_rating, rating_number,
 Key queries:
 ```sql
 -- Extract product image URL
-SELECT images->0->>'hi_res' AS image_url FROM product_metadata_demo WHERE id = 3522;
+SELECT images->0->>'hi_res' AS image_url FROM product_sample WHERE id = 3522;
 
 -- Hybrid search (what ai.search does under the hood)
 SELECT * FROM ai.search(
     query => 'mid-century modern chair',
-    source_table => 'product_metadata_demo',
+    source_table => 'product_sample',
     embedding_column => 'embedding',
     rerank => true,
     filter => 'categories @> ''["Chairs"]'' AND average_rating >= 4.0'

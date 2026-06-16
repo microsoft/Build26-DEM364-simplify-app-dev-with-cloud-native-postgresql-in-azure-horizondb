@@ -31,10 +31,10 @@ The 6-tool agent pipeline:
 
 ### 🧱 Tech Stack
 
-- **Database:** Azure HorizonDB (PostgreSQL) with extensions: `azure_ai`, `pg_fts`, `age`, `vector`
+- **Database:** Azure HorizonDB (PostgreSQL) with extensions: `azure_ai`, `pg_fts`, `age`, `vector`, `pg_diskann`, `pg_durable`
 - **Frontend:** React 18 + Vite 6
 - **Backend:** Express 4 + node-postgres
-- **Data:** ~100K Amazon Home & Kitchen products in `product_metadata_demo`
+- **Data:** ~60 Amazon Home & Kitchen products in `product_sample`
 
 ### 📁 Repository Structure
 
@@ -81,14 +81,35 @@ The 6-tool agent pipeline:
 
 ### ✅ Prerequisites
 
-- **Azure HorizonDB server** with the following extensions enabled: `azure_ai`, `pg_fts`, `age`, `vector`
-- **Model Management enabled** on the HorizonDB server (Azure Portal → AI Settings → Enable Model Management) — provides `default-embedding` and `default-chat` models
+- **Azure HorizonDB server** with the following extensions enabled via a parameter group (see [Quick Start step 1](#1-enable-the-required-extensions-parameter-group)): `azure_ai`, `pg_fts`, `age`, `vector`, `pg_diskann`, `pg_durable`
+- **Model Management enabled** on the HorizonDB server (Azure Portal → AI Settings → Enable Model Management) — provides `default-embedding` and `default-chat` models. This is currently in **limited preview**; request access via [https://aka.ms/horizondb-aimm-preview](https://aka.ms/horizondb-aimm-preview). If Model Management is not available on your server, configure an Azure OpenAI endpoint and key manually — see [`src/demo-sql/setup/ai-search.sql`](src/demo-sql/setup/ai-search.sql)
 - **Node.js** 18+ and npm
-- **Product data** loaded into `product_metadata_demo` table (~100K rows)
+
+> **Note:** Product data is loaded as part of setup (Quick Start step 3) — it is not a precondition.
 
 ## ⚡ Quick Start
 
-### 1. Set up the database
+### 1. Enable the required extensions (Parameter Group)
+
+Before running any setup scripts, enable all required extensions on your Azure HorizonDB server using a **parameter group**. The extensions this demo needs are:
+
+`azure_ai`, `pg_fts`, `age`, `vector`, `pg_diskann`, `pg_durable`
+
+Some of these (for example `pg_durable` and `pg_fts`) must also be loaded as shared libraries. Use these setup articles:
+
+- [Load shared libraries](https://learn.microsoft.com/en-us/azure/horizondb/extensions/how-to-load-libraries)
+- [Allow extensions](https://learn.microsoft.com/en-us/azure/horizondb/extensions/how-to-allow-extensions)
+- [Create extensions](https://learn.microsoft.com/en-us/azure/horizondb/extensions/how-to-create-extensions)
+
+1. Create a parameter group for your server.
+2. Set `shared_preload_libraries` to include the libraries that require preloading (e.g. `pg_durable`, `pg_fts`).
+3. Set `azure.extensions` to include **all** of the extensions above.
+4. Apply the parameter group to the server (this may trigger a restart).
+5. Connect to each target database — the setup scripts in the next step run `CREATE EXTENSION` for you.
+
+> **Note:** If an extension is missing from the parameter group, `CREATE EXTENSION` fails with an error like `extension "pg_diskann" is not allow-listed`. Add it to `azure.extensions` (and `shared_preload_libraries` if it needs preloading), reapply the parameter group, and retry.
+
+### 2. Set up the database
 
 Run the setup scripts against your HorizonDB instance in order:
 
@@ -102,14 +123,18 @@ Run the setup scripts against your HorizonDB instance in order:
 
 > **Note:** The `private/` folder contains internal function definitions (`ai-pipelines-setup.sql`, `ai-search-internal.sql`) that must be run on the server before the demo scripts. These are gitignored and not published — contact the demo owner for access.
 
-### 2. Load sample data
+> **Note on schema choice (`public` vs `ai`):** The native `ai.search()` function is an **upcoming HorizonDB feature shipping in Summer 2026** — until then, this demo ships equivalent helper functions you create yourself. On Azure HorizonDB the `ai` schema is owned by the platform superuser (`azuresu`), and the admin login (`adminuser`) has `USAGE` only — **not** `CREATE`. Attempting `CREATE FUNCTION ai.search...` fails with `permission denied for schema ai`, and you cannot `GRANT` yourself rights on a schema you do not own. For this reason the search helper functions in [`ai-search.sql`](src/demo-sql/setup/ai-search.sql) (`search`, `search_orig`, and components) are created in the **`public`** schema, which the admin role can write to. Functions in `public` are executable by `PUBLIC` by default, so no extra `GRANT` is needed. If you have a role that owns or can write to `ai`, change the `public.` prefixes in that script back to `ai.`.
+
+### 3. Load sample data
 
 ```bash
 # Load product data from CSV
-\copy product_sample FROM 'src/demo-sql/setup/data/product_sample_may13.csv' WITH (FORMAT csv, HEADER true);
+# Note: ENCODING 'UTF8' avoids "character has no equivalent in UTF8" errors
+# on clients with a non-UTF8 locale (common on Windows psql).
+\copy product_sample FROM 'src/demo-sql/setup/data/product_sample_may13.csv' WITH (FORMAT csv, HEADER true, ENCODING 'UTF8');
 ```
 
-### 3. Run the demo scripts
+### 4. Run the demo scripts
 
 ```bash
 \i src/demo-sql/data_ingest_with_ai_pipelines.sql
@@ -117,7 +142,7 @@ Run the setup scripts against your HorizonDB instance in order:
 \i src/demo-sql/data_graph_query.sql
 ```
 
-### 4. Start the web app
+### 5. Start the web app
 
 ```bash
 cd src/zava-designer-agent-ui-demo
@@ -137,7 +162,7 @@ npm run dev:full
 
 The frontend opens at `http://localhost:5180` and proxies API calls to the Express backend on `:3001`.
 
-### 5. Use the app
+### 6. Use the app
 
 1. Open `http://localhost:5180`
 2. Click **"Design My Room"**
@@ -154,6 +179,7 @@ The frontend opens at `http://localhost:5180` and proxies API calls to the Expre
 **⚡ Hybrid Search (`ai.search`)**
 
  - BM25 full-text + DiskANN vector + RRF fusion + semantic reranking — all in a single function call, filtered by category.
+ - **Upcoming feature (Summer 2026):** the native `ai.search()` function is on the HorizonDB roadmap and ships in **Summer 2026**. Until then, this demo provides the same capability through equivalent helper functions (`public.search` / `public.search_orig`) defined in [`ai-search.sql`](src/demo-sql/setup/ai-search.sql).
 
 **⚡ Graph Traversal (Apache AGE)**
 
