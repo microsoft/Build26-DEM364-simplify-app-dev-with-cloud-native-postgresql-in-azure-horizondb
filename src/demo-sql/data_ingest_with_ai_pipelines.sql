@@ -27,14 +27,6 @@ SELECT * FROM model_registry.model_list_all();
 -- ---------------------------------------------------------------------------
 -- Pipeline Creation
 -- ---------------------------------------------------------------------------
--- The sink table is REQUIRED. ai.create_pipeline has no overload without a
--- `sink` argument, and the sink table must define these five columns exactly:
--- doc_id, chunk_index, chunk_text, embedding, metadata.
---
--- We also add an `id` identity column as a chunk-level surrogate key. The
--- hybrid search helpers in setup/ai-search.sql select an `id` column from the
--- source table, so this lets public.search() run against the sink table.
--- The pipeline never writes to `id`; it is auto-generated on insert.
 
 -- DROP TABLE IF EXISTS embedding_pipeline_output;
 CREATE TABLE IF NOT EXISTS embedding_pipeline_output (

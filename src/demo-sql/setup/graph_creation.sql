@@ -5,6 +5,15 @@ SET search_path = ag_catalog, "$user", public, pgfts;
 SELECT ag_catalog.drop_graph('style_graph', true);
 SELECT ag_catalog.create_graph('style_graph');
 
+-- Pre-create all vertex/edge labels so their backing tables always exist,
+-- even if a given set (e.g. Category or SIMILAR_TO) ends up empty.
+SELECT ag_catalog.create_vlabel('style_graph', 'Product');
+SELECT ag_catalog.create_vlabel('style_graph', 'Style');
+SELECT ag_catalog.create_vlabel('style_graph', 'Category');
+SELECT ag_catalog.create_elabel('style_graph', 'HAS_STYLE');
+SELECT ag_catalog.create_elabel('style_graph', 'IN_CATEGORY');
+SELECT ag_catalog.create_elabel('style_graph', 'SIMILAR_TO');
+
 -- Create one node per distinct style
 SELECT * FROM ag_catalog.cypher('style_graph', $$
     CREATE (:Style {name: 'Mid-Century Modern', disp_label: 'Mid-Century Modern'}),
@@ -24,9 +33,15 @@ DECLARE
     safe_style TEXT;
 BEGIN
     SET search_path = ag_catalog, "$user", public, pgfts;
-    FOR r IN SELECT id, title, extracted->>'style' AS style
-             FROM style_tagger_output
-             WHERE extracted->>'style' IS NOT NULL
+    -- Map each pipeline row back to its product by matching the first chunk
+    -- against the start of product_sample.content. doc_id is a pipeline scan
+    -- sequence (1..N), NOT product_sample.id, so it cannot be used to join.
+    FOR r IN SELECT p.id, p.title, sto.metadata->>'style' AS style
+             FROM style_tagger_output sto
+             JOIN product_sample p
+               ON left(p.content, length(sto.chunk_text)) = sto.chunk_text
+             WHERE sto.chunk_index = 0
+               AND sto.metadata->>'style' IS NOT NULL
     LOOP
         safe_title := replace(replace(r.title, '\', '\\'), '''', '\''');
         safe_title := replace(safe_title, '"', '\"');
@@ -47,8 +62,9 @@ DO $$
 DECLARE r RECORD; safe_cat TEXT;
 BEGIN
     SET search_path = ag_catalog, "$user", public, pgfts;
-    FOR r IN SELECT DISTINCT category FROM style_tagger_output
-             WHERE category IS NOT NULL
+    FOR r IN SELECT DISTINCT p.category
+             FROM product_sample p
+             WHERE p.category IS NOT NULL
     LOOP
         safe_cat := replace(r.category, '''', '\''');
         EXECUTE format(
@@ -63,8 +79,14 @@ DO $$
 DECLARE r RECORD; safe_cat TEXT;
 BEGIN
     SET search_path = ag_catalog, "$user", public, pgfts;
-    FOR r IN SELECT id, category FROM style_tagger_output
-             WHERE category IS NOT NULL
+    -- Same first-chunk mapping as the Product nodes, so we only link products
+    -- that actually exist as nodes in the graph.
+    FOR r IN SELECT p.id, p.category
+             FROM style_tagger_output sto
+             JOIN product_sample p
+               ON left(p.content, length(sto.chunk_text)) = sto.chunk_text
+             WHERE sto.chunk_index = 0
+               AND p.category IS NOT NULL
     LOOP
         safe_cat := replace(r.category, '''', '\''');
         EXECUTE format(
@@ -86,11 +108,11 @@ DECLARE
 BEGIN
     SET search_path = ag_catalog, "$user", public, pgfts;
     FOR r IN SELECT DISTINCT style, related_style FROM (
-                 SELECT extracted->>'style' AS style,
-                        trim(unnest(string_to_array(generated, ','))) AS related_style
+                 SELECT metadata->>'style' AS style,
+                        trim(unnest(string_to_array(generated_text, ','))) AS related_style
                  FROM style_tagger_output
-                 WHERE extracted->>'style' IS NOT NULL
-                   AND generated IS NOT NULL
+                 WHERE metadata->>'style' IS NOT NULL
+                   AND generated_text IS NOT NULL
              ) sub
     LOOP
         -- Skip self-references and empty strings
